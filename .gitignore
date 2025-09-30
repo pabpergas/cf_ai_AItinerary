@@ -1,0 +1,39 @@
+# Node
+node_modules/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Salida de compilación
+dist/
+build/
+.vite/
+.vitest/
+coverage/
+
+# Archivos de entorno
+.env
+.env.*
+!.env.example
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
+
+# Archivos de configuración de IDE
+.vscode/
+.idea/
+*.swp
+
+# Salida de Wrangler (Cloudflare)
+.wrangler/
+wrangler.toml.local
+
+# Otros
+*.local
+*.log
+
+# Archivos de correo electrónico exportados (regla personalizada)
+emails/*.html
