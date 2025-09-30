@@ -1,0 +1,56 @@
+/**
+ * Local configuration template for Wrangler
+ * Copy this file to wrangler.jsonc and fill in your actual values
+ * For more details: https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "aitinerary",
+	"main": "server/server.ts",
+	"compatibility_date": "2025-08-03",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"browser": {
+		"binding": "BROWSER"
+	},
+	"assets": {
+		"directory": "public"
+	},
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "Chat",
+				"class_name": "Chat"
+			},
+			{
+				"name": "CollaborativeItinerary",
+				"class_name": "CollaborativeItinerary"
+			}
+		]
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "aitinerary-db",
+			"database_id": "YOUR_DATABASE_ID_HERE"
+		}
+	],
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": [
+				"Chat"
+			]
+		},
+		{
+			"tag": "v2",
+			"new_sqlite_classes": [
+				"CollaborativeItinerary"
+			]
+		}
+	],
+	"observability": {
+		"enabled": true
+	}
+}

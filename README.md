@@ -2,10 +2,10 @@
 
 AI-powered travel itinerary planner built with Cloudflare Workers, Durable Objects, and OpenAI. The system generates personalized travel plans with intelligent recommendations, hotel searches via Booking.com, and real-time voice interaction.
 
-## Testing URL
-```
-https://
-```
+## Demo
+
+You can test the application at: **https://aitinerary.pabloperezgaspar.workers.dev**
+
 
 ## System Overview
 
@@ -32,6 +32,7 @@ AItinerary is a serverless application that combines:
 - Cloudflare account
 - OpenAI API key
 
+
 ## Setup
 
 ### 1. Clone and Install
@@ -52,9 +53,17 @@ OPENAI_API_KEY=your_openai_api_key_here
 
 ### 3. Configure Cloudflare
 
-Update `wrangler.jsonc`:
-- Set your `account_id`
-- Configure D1 database binding
+Copy the template configuration file:
+
+```bash
+cp wrangler.local.jsonc wrangler.jsonc
+```
+
+Update `wrangler.jsonc` with your values:
+- Replace `YOUR_DATABASE_ID_HERE` with your actual D1 database ID (see step 4)
+- Optionally add your `account_id` if deploying
+
+**Important**: The `wrangler.jsonc` file contains sensitive configuration and should not be committed to version control. Use `wrangler.local.jsonc` as a template.
 
 ### 4. Create and Setup Database
 
@@ -65,6 +74,12 @@ npx wrangler d1 create aitinerary-db
 ```
 
 Copy the generated `database_id` to `wrangler.jsonc` under the `d1_databases` binding.
+
+**Configuration Steps:**
+1. Copy `wrangler.local.jsonc` to `wrangler.jsonc`
+2. Replace `YOUR_DATABASE_ID_HERE` with your actual database ID
+3. Add your Cloudflare `account_id` if deploying to production
+4. The `wrangler.jsonc` file will contain your sensitive configuration
 
 Run migrations locally:
 
