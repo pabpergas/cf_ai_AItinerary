@@ -1,37 +1,25 @@
 import { useEffect, useState, useRef, useCallback, use } from "react";
 import { useAgent } from "agents/react";
-import { isToolUIPart } from "ai";
 import { useAgentChat } from "agents/ai-react";
 import type { UIMessage } from "@ai-sdk/react";
-import type { tools } from "./tools";
+// tools import removed - tools are now in server directory
 
 // Component imports
-import { Button } from "@/components/button/Button";
-import { Textarea } from "@/components/textarea/Textarea";
-import { MemoizedMarkdown } from "@/components/memoized-markdown";
 import { ItineraryDisplay } from "@/components/itinerary/ItineraryDisplay";
 import { AuthModal } from "@/components/auth/AuthModal";
+import { AnimatedShinyText } from "@/components/ui/AnimatedShinyText";
+import AIOrb from "@/components/ui/AIOrb";
+import { WelcomeScreen } from "@/components/welcome/WelcomeScreen";
+import { ChatMessage } from "@/components/chat/ChatMessage";
+import { ChatInput } from "@/components/chat/ChatInput";
+import { Sidebar } from "@/components/sidebar/Sidebar";
+import { VoiceCall } from "@/components/voice/VoiceCall";
+import { downloadICalFile } from "@/lib/calendar-export";
+import { ShareButton } from "@/components/collaboration/ShareButton";
 
-// Icon imports
-import {
-  PaperPlaneTilt,
-  Stop,
-  Plus,
-  Sidebar,
-  User,
-  SignOut,
-  MagnifyingGlass,
-  Books,
-  Folder,
-  ChatCircle,
-  PencilSimple,
-  ArrowUp,
-  Microphone,
-  Paperclip
-} from "@phosphor-icons/react";
 
 // List of tools that require human confirmation - now empty since all tools execute automatically
-const toolsRequiringConfirmation: (keyof typeof tools)[] = [];
+const toolsRequiringConfirmation: string[] = [];
 
 interface User {
   userId: string;
@@ -54,6 +42,20 @@ export default function AItinerary() {
   }>>([]);
   const [user, setUser] = useState<User | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
+  
+  // Check if this is a share/collaboration URL using query parameters
+  const urlParams = new URLSearchParams(window.location.search);
+  const collaborationItineraryId = urlParams.get('collaborate');
+  const isCollaborationMode = !!collaborationItineraryId;
+  
+  const [isReasoning, setIsReasoning] = useState(false);
+  const [currentItinerary, setCurrentItinerary] = useState<any>(null);
+  const [isGeneratingItinerary, setIsGeneratingItinerary] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [rightSidebarWidth, setRightSidebarWidth] = useState(480); // Default width in pixels
+  const [searchEnabled, setSearchEnabled] = useState(false);
+  const [isVoiceCallOpen, setIsVoiceCallOpen] = useState(false);
+  const [voiceMessages, setVoiceMessages] = useState<any[]>([]);
   const [userId] = useState(() => {
     // Generate or retrieve user ID from localStorage
     const stored = localStorage.getItem('aitinerary-user-id');
@@ -63,7 +65,263 @@ export default function AItinerary() {
     localStorage.setItem('aitinerary-user-id', newId);
     return newId;
   });
+  const [conversationId, setConversationId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return localStorage.getItem("aitinerary-conversation-id");
+  });
+
+  // Generate new conversation ID when starting a new chat
+  const startNewConversation = useCallback(() => {
+    const newConversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    setConversationId(newConversationId);
+    localStorage.setItem("aitinerary-conversation-id", newConversationId);
+    return newConversationId;
+  }, []);
+
+  // Clear conversation when starting fresh
+  const startFreshConversation = useCallback(() => {
+    localStorage.removeItem("aitinerary-conversation-id");
+    setConversationId(null);
+    // Clear history will be called after agentClearHistory is available
+  }, []);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const agent = useAgent({
+    agent: "chat",
+    name: conversationId || userId, // One DO per conversation
+    query: { token: user?.token ?? "" }
+  }, {
+    key: conversationId // Force recreation when conversationId changes
+  });
+
+  const {
+    messages: agentMessages,
+    addToolResult,
+    clearHistory: agentClearHistory,
+    status,
+    sendMessage,
+    stop
+  } = useAgentChat<unknown, UIMessage<{ createdAt: string }>>({
+    agent
+  });
+
+  // Complete fresh conversation function that includes clearing history
+  const completeFreshConversation = useCallback(() => {
+    startFreshConversation();
+    agentClearHistory();
+  }, [startFreshConversation, agentClearHistory]);
+
+  // Detectar reasoning e itinerarios desde los mensajes
+  useEffect(() => {
+    const lastMessage = agentMessages[agentMessages.length - 1];
+    if (!lastMessage) return;
+
+    // Look for reasoning-start in any message, not just the last one
+    const hasActiveReasoning = agentMessages.some(m => 
+      m.parts?.some((p: any) => p.type === 'reasoning-start')
+    );
+    const hasReasoningEnd = agentMessages.some(m =>
+      m.parts?.some((p: any) => p.type === 'reasoning-end')
+    );
+
+    console.log('[Reasoning] Active:', hasActiveReasoning, 'End:', hasReasoningEnd, 'Messages:', agentMessages.length);
+    
+    if (hasActiveReasoning && !hasReasoningEnd) {
+      setIsReasoning(true);
+    } else if (hasReasoningEnd) {
+      setIsReasoning(false);
+    }
+
+    // Update isProcessing based on agent status and message state
+    const isAgentBusy = status === "streaming" || status === "submitted";
+    const lastAssistantMessage = agentMessages.filter(m => m.role === 'assistant').pop();
+    const hasTextContent = lastAssistantMessage?.parts?.some(p => p.type === 'text' && p.text && p.text.trim().length > 0);
+    
+    // Keep processing true until we have actual text content from the assistant
+    setIsProcessing(isAgentBusy && !hasTextContent);
+
+    // Detect itinerary generation
+    const hasItineraryToolCall = lastMessage.parts?.some((p: any) => 
+      p.type === 'tool-generateCompleteItinerary'
+    );
+    
+    if (hasItineraryToolCall) {
+      setIsGeneratingItinerary(true);
+    }
+
+    // Extract itinerary when ready
+    agentMessages.forEach(message => {
+      message.parts?.forEach((part: any) => {
+        if (part.type === 'text' && message.role === 'assistant') {
+          const text = part.text?.trim() || '';
+          
+          // Check for full itinerary JSON
+          const isItineraryJson = text.startsWith('{') && 
+            text.includes('"id"') && 
+            text.includes('"destination"') && 
+            text.includes('"days"');
+          
+          if (isItineraryJson) {
+            try {
+              const itinerary = JSON.parse(text);
+              setCurrentItinerary(itinerary);
+              setIsGeneratingItinerary(false);
+            } catch (e) {
+              console.error('Failed to parse itinerary:', e);
+            }
+          }
+
+          // Check for single activity JSON (activity modification)
+          // Try to extract JSON even if there's text before/after
+          let activityJson = text;
+          const jsonMatch = text.match(/\{[\s\S]*?"id"[\s\S]*?"dayNumber"[\s\S]*?\}/);
+          if (jsonMatch) {
+            activityJson = jsonMatch[0];
+          }
+          
+          const isActivityJson = activityJson.startsWith('{') && 
+            activityJson.includes('"id"') && 
+            activityJson.includes('"title"') && 
+            activityJson.includes('"dayNumber"') &&
+            !activityJson.includes('"destination"') &&
+            !activityJson.includes('"days"');
+          
+          if (isActivityJson && currentItinerary) {
+            try {
+              const updatedActivity = JSON.parse(activityJson);
+              if (updatedActivity.id && updatedActivity.dayNumber) {
+                // Update the specific activity in the current itinerary
+                const updatedItinerary = { ...currentItinerary };
+                const dayIndex = updatedItinerary.days.findIndex((day: any) => day.dayNumber === updatedActivity.dayNumber);
+                
+                if (dayIndex !== -1) {
+                  const activityIndex = updatedItinerary.days[dayIndex].activities.findIndex((act: any) => act.id === updatedActivity.id);
+                  
+                  if (activityIndex !== -1) {
+                    // Replace existing activity
+                    updatedItinerary.days[dayIndex].activities[activityIndex] = updatedActivity;
+                    setCurrentItinerary(updatedItinerary);
+                    console.log('Activity updated:', updatedActivity.title);
+                  } else {
+                    // Add new activity to the day
+                    updatedItinerary.days[dayIndex].activities.push(updatedActivity);
+                    setCurrentItinerary(updatedItinerary);
+                    console.log('Activity added:', updatedActivity.title);
+                  }
+                } else {
+                  console.warn(`Day ${updatedActivity.dayNumber} not found in itinerary`);
+                }
+              }
+            } catch (e) {
+              console.error('Failed to parse activity JSON:', e);
+            }
+          }
+        }
+
+        if (part.type === 'tool-generateCompleteItinerary' && part.state === 'output-available' && part.output) {
+          try {
+            const itinerary = typeof part.output === 'string' ? JSON.parse(part.output) : part.output;
+            setCurrentItinerary(itinerary);
+            setIsGeneratingItinerary(false);
+          } catch (e) {
+            console.error('Failed to parse itinerary from tool:', e);
+          }
+        }
+
+        // Handle removeActivity tool
+        if (part.type === 'tool-removeActivity' && part.state === 'output-available' && part.output) {
+          try {
+            const result = typeof part.output === 'string' ? JSON.parse(part.output) : part.output;
+            if (result.success && result.removedActivityId && currentItinerary) {
+              // Remove the activity from the current itinerary
+              const updatedItinerary = { ...currentItinerary };
+              let activityRemoved = false;
+              
+              for (const day of updatedItinerary.days) {
+                const activityIndex = day.activities.findIndex((act: any) => act.id === result.removedActivityId);
+                if (activityIndex !== -1) {
+                  day.activities.splice(activityIndex, 1);
+                  activityRemoved = true;
+                  console.log('Activity removed:', result.removedActivityId);
+                  break;
+                }
+              }
+              
+              if (activityRemoved) {
+                setCurrentItinerary(updatedItinerary);
+              }
+            }
+          } catch (e) {
+            console.error('Failed to process removeActivity:', e);
+          }
+        }
+
+        // Handle removeMultipleActivities tool
+        if (part.type === 'tool-removeMultipleActivities' && part.state === 'output-available' && part.output) {
+          try {
+            const result = typeof part.output === 'string' ? JSON.parse(part.output) : part.output;
+            if (result.success && result.removedActivityIds && currentItinerary) {
+              // Remove multiple activities from the current itinerary
+              const updatedItinerary = { ...currentItinerary };
+              let removedCount = 0;
+              
+              for (const activityId of result.removedActivityIds) {
+                for (const day of updatedItinerary.days) {
+                  const activityIndex = day.activities.findIndex((act: any) => act.id === activityId);
+                  if (activityIndex !== -1) {
+                    day.activities.splice(activityIndex, 1);
+                    removedCount++;
+                    console.log('Activity removed:', activityId);
+                    break;
+                  }
+                }
+              }
+              
+              if (removedCount > 0) {
+                setCurrentItinerary(updatedItinerary);
+                console.log(`${removedCount} activities removed from itinerary`);
+              }
+            }
+          } catch (e) {
+            console.error('Failed to process removeMultipleActivities:', e);
+          }
+        }
+
+        // Handle addMultipleActivities tool
+        if (part.type === 'tool-addMultipleActivities' && part.state === 'output-available' && part.output) {
+          try {
+            const result = typeof part.output === 'string' ? JSON.parse(part.output) : part.output;
+            if (result.success && result.addedActivities && currentItinerary) {
+              // Add multiple activities to the current itinerary
+              const updatedItinerary = { ...currentItinerary };
+              let addedCount = 0;
+              
+              for (const { dayNumber, activity } of result.addedActivities) {
+                const dayIndex = updatedItinerary.days.findIndex((day: any) => day.dayNumber === dayNumber);
+                if (dayIndex !== -1) {
+                  updatedItinerary.days[dayIndex].activities.push(activity);
+                  addedCount++;
+                  console.log('Activity added:', activity.title);
+                } else {
+                  console.warn(`Day ${dayNumber} not found in itinerary`);
+                }
+              }
+              
+              if (addedCount > 0) {
+                setCurrentItinerary(updatedItinerary);
+                console.log(`${addedCount} activities added to itinerary`);
+              }
+            }
+          } catch (e) {
+            console.error('Failed to process addMultipleActivities:', e);
+          }
+        }
+
+        // Log parts para debug
+        console.log('[Message Part]', part.type, message.role);
+      });
+    });
+  }, [agentMessages, status]);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -100,116 +358,225 @@ What would you like to know or change about this activity?`;
     }, 0);
   }, []);
 
+
   const handleSaveItinerary = useCallback(async (itinerary: any) => {
-    const saveMessage = `Please save this itinerary for me:
+      if (!user?.token) {
+        alert('You must sign in to save itineraries');
+        return;
+      }
 
-Itinerary: ${JSON.stringify(itinerary)}
-User ID: ${userId}
-Make it public: false
+    try {
+      const response = await fetch('/api/itineraries', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${user.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 
+          itinerary: JSON.stringify(itinerary), 
+          isPublic: false 
+        }),
+      });
 
-Please save this itinerary so I can access it later.`;
+      const data = await response.json();
 
-    await sendMessage({
-      role: "user",
-      parts: [{ type: "text", text: saveMessage }]
-    });
-  }, [sendMessage, userId]);
+      if (data.success) {
+        alert('Itinerary saved successfully');
+      } else {
+        alert(`Error: ${data.error}`);
+      }
+    } catch (error) {
+      console.error('Save itinerary error:', error);
+      alert('Error al guardar el itinerario');
+    }
+  }, [user?.token]);
 
   const handleShareItinerary = useCallback(async (itinerary: any) => {
-    const shareMessage = `Please share this itinerary publicly:
+    if (!user?.token) {
+      alert('You must sign in to share itineraries');
+      return;
+    }
 
-Itinerary: ${JSON.stringify(itinerary)}
-User ID: ${user?.userId || userId}
-Make it public: true
+    try {
+      const response = await fetch('/api/itineraries', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${user.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 
+          itinerary: JSON.stringify(itinerary), 
+          isPublic: true 
+        }),
+      });
 
-Please make this itinerary public and give me a shareable link.`;
+      const data = await response.json();
 
-    await sendMessage({
-      role: "user",
-      parts: [{ type: "text", text: shareMessage }]
-    });
-  }, [sendMessage, user?.userId, userId]);
+      if (data.success) {
+        if (data.shareUrl) {
+          navigator.clipboard.writeText(data.shareUrl);
+          alert(`Itinerary shared! URL copied to clipboard: ${data.shareUrl}`);
+        } else {
+          alert('Itinerary saved but could not generate share link');
+        }
+      } else {
+        alert(`Error: ${data.error}`);
+      }
+    } catch (error) {
+      console.error('Share itinerary error:', error);
+      alert('Error al compartir el itinerario');
+    }
+  }, [user?.token]);
+
+  const handleExportToCalendar = useCallback(() => {
+    if (!currentItinerary) {
+      alert('No itinerary to export');
+      return;
+    }
+    
+    downloadICalFile(currentItinerary);
+  }, [currentItinerary]);
+
+  // Generate share link when itinerary is created
+  const generateShareLink = useCallback(() => {
+    if (currentItinerary && conversationId) {
+      const baseUrl = window.location.origin;
+      return `${baseUrl}/collaborate/${conversationId}`;
+    }
+    return null;
+  }, [currentItinerary, conversationId]);
 
   const handleLogin = useCallback(async (email: string, password: string) => {
-    const loginMessage = `Please log me in with the following credentials:
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email, password }),
+      });
 
-Email: ${email}
-Password: ${password}
+      const data = await response.json();
 
-Please authenticate this user and return their profile information.`;
-
-    await sendMessage({
-      role: "user",
-      parts: [{ type: "text", text: loginMessage }]
-    });
-  }, [sendMessage]);
+      if (data.success) {
+        const userData: User = {
+          userId: data.userId,
+          email: data.email,
+          name: data.name,
+          token: data.token
+        };
+        setUser(userData);
+        localStorage.setItem('aitinerary-user', JSON.stringify(userData));
+        setShowAuthModal(false);
+      } else {
+        alert(`Error: ${data.error}`);
+      }
+    } catch (error) {
+      console.error('Login error:', error);
+      alert('Connection error. Please try again.');
+    }
+  }, []);
 
   const handleRegister = useCallback(async (email: string, password: string, name: string) => {
-    const registerMessage = `Please register a new user with the following information:
+    try {
+      const response = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email, password, name }),
+      });
 
-Name: ${name}
-Email: ${email}
-Password: ${password}
+      const data = await response.json();
 
-Please create this user account and log them in.`;
+      if (data.success) {
+        const userData: User = {
+          userId: data.userId,
+          email: data.email,
+          name: data.name,
+          token: data.token
+        };
+        setUser(userData);
+        localStorage.setItem('aitinerary-user', JSON.stringify(userData));
+        setShowAuthModal(false);
+      } else {
+        alert(`Error: ${data.error}`);
+      }
+    } catch (error) {
+      console.error('Registration error:', error);
+      alert('Connection error. Please try again.');
+    }
+  }, []);
 
-    await sendMessage({
-      role: "user",
-      parts: [{ type: "text", text: registerMessage }]
-    });
-  }, [sendMessage]);
-
-  const handleLogout = useCallback(() => {
+  const handleLogout = useCallback(async () => {
+    try {
+      if (user?.token) {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${user.token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+      }
+    } catch (error) {
+      console.error('Logout error:', error);
+    } finally {
     setUser(null);
     localStorage.removeItem('aitinerary-user');
     localStorage.removeItem('aitinerary-recent-chats');
-    clearHistory();
+      agentClearHistory();
     setRecentChats([]);
-  }, [clearHistory]);
-
-  const agent = useAgent({
-    agent: "chat",
-    agentOptions: {
-      durableObjectId: userId
     }
-  });
+  }, [user?.token, agentClearHistory]);
 
-  const handleAgentInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+  const handleAgentInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    if (!user?.token) {
+      setShowAuthModal(true);
+      return;
+    }
+
     setAgentInput(e.target.value);
     // Auto-resize textarea
-    e.target.style.height = "auto";
-    e.target.style.height = `${e.target.scrollHeight}px`;
-  };
+    setTimeout(() => {
+      const textarea = document.querySelector('textarea');
+      if (textarea) {
+        textarea.style.height = "auto";
+        textarea.style.height = `${textarea.scrollHeight}px`;
+      }
+    }, 0);
+  }, [user?.token]);
 
-  const handleAgentSubmit = async (e: React.FormEvent) => {
+  const handleAgentSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     if (!agentInput.trim()) return;
+    if (!user?.token) {
+      setShowAuthModal(true);
+      return;
+    }
+
+    // Start new conversation only if there's no existing conversationId
+    if (!conversationId) {
+      startNewConversation();
+    }
 
     const message = agentInput;
     setAgentInput("");
     
-    // Reset textarea height
     const textarea = document.querySelector('textarea');
     if (textarea) {
-      textarea.style.height = "auto";
+      (textarea as HTMLTextAreaElement).style.height = "auto";
     }
+
+    const messageWithContext = searchEnabled 
+      ? `${message}\n\n[WEB_SEARCH_ENABLED: The user has enabled web search. You MUST use searchWeb to get updated information about restaurants, attractions, prices and reviews. You MUST use searchBooking to search for real hotels with current prices. Prioritize real data over general knowledge.]`
+      : message;
 
     await sendMessage({
       role: "user",
-      parts: [{ type: "text", text: message }]
+      parts: [{ type: "text", text: messageWithContext }]
     });
-  };
-
-  const {
-    messages: agentMessages,
-    addToolResult,
-    clearHistory,
-    status,
-    sendMessage,
-    stop
-  } = useAgentChat<unknown, UIMessage<{ createdAt: string }>>({
-    agent
-  });
+  }, [agentInput, sendMessage, user?.token, conversationId, startNewConversation]);
 
   useEffect(() => {
     scrollToBottom();
@@ -229,249 +596,303 @@ Please create this user account and log them in.`;
       }
     };
 
-    // Load recent chats from localStorage
-    const loadRecentChats = () => {
-      const stored = localStorage.getItem('aitinerary-recent-chats');
-      if (stored) {
-        try {
-          const chats = JSON.parse(stored);
-          setRecentChats(chats.slice(0, 5)); // Show only last 5 chats
-        } catch (e) {
-          console.error('Failed to parse recent chats:', e);
-        }
-      }
-    };
-
     loadUser();
-    loadRecentChats();
   }, []);
 
   useEffect(() => {
-    // Listen for auth responses from tools
-    const lastMessage = agentMessages[agentMessages.length - 1];
-    if (lastMessage && lastMessage.role === 'assistant') {
-      lastMessage.parts?.forEach(part => {
-        if (isToolUIPart(part) && 
-            (part.type === 'tool-registerUser' || part.type === 'tool-loginUser') && 
-            part.state === 'output-available' && 
-            part.output) {
-          try {
-            const authResult = JSON.parse(part.output as string);
-            if (authResult.success && authResult.userId && authResult.token) {
-              const userData: User = {
-                userId: authResult.userId,
-                email: authResult.email,
-                name: authResult.name,
-                token: authResult.token
-              };
-              setUser(userData);
-              localStorage.setItem('aitinerary-user', JSON.stringify(userData));
-              setShowAuthModal(false);
-            }
-          } catch (e) {
-            console.error('Failed to parse auth response:', e);
-          }
+    // Load conversations when user is available
+    const loadConversations = async () => {
+      if (!user?.token) return;
+      
+      try {
+        const response = await fetch('/api/conversations', {
+          headers: { Authorization: `Bearer ${user.token}` }
+        });
+        if (response.ok) {
+          const data: any = await response.json();
+          setRecentChats(data.conversations || []);
         }
-      });
+      } catch (error) {
+        console.error('Failed to load conversations:', error);
+      }
+    };
+
+    if (user?.token) {
+      loadConversations();
     }
-  }, [agentMessages]);
+  }, [user?.token]);
+
+  // The agents system automatically handles message loading
+  // No need for manual message loading since agents have their own persistence
+
+  // Reload conversations after sending a message
+  useEffect(() => {
+    if (user?.token && agentMessages.length > 0) {
+      const loadConversations = async () => {
+        try {
+          const response = await fetch('/api/conversations', {
+            headers: { Authorization: `Bearer ${user.token}` }
+          });
+          if (response.ok) {
+            const data: any = await response.json();
+            setRecentChats(data.conversations || []);
+          }
+        } catch (error) {
+          console.error('Failed to reload conversations:', error);
+        }
+      };
+      
+      // Small delay to ensure backend has processed the message
+      setTimeout(loadConversations, 1000);
+    }
+  }, [agentMessages.length, user?.token]);
+
+
+  const titleUpdatedRef = useRef(false);
 
   useEffect(() => {
-    // Save current chat to recent chats when it has content
-    if (agentMessages.length > 0) {
-      const lastMessage = agentMessages[agentMessages.length - 1];
+    // Auto-generate conversation title from first user message (only once per conversation)
+    if (agentMessages.length === 1 && conversationId && user?.token) {
       const firstUserMessage = agentMessages.find(m => m.role === 'user');
       
-      if (firstUserMessage && lastMessage) {
-        const chatData = {
-          id: userId,
-          title: 'Travel Chat',
-          lastMessage: lastMessage.parts?.[0]?.type === 'text' ? lastMessage.parts[0].text.slice(0, 100) + '...' : 'Chat started',
-          timestamp: new Date().toISOString()
-        };
-
-        setRecentChats(prev => {
-          const filtered = prev.filter(chat => chat.id !== userId);
-          const updated = [chatData, ...filtered].slice(0, 5);
-          
-          // Save to localStorage
-          localStorage.setItem('aitinerary-recent-chats', JSON.stringify(updated));
-          
-          return updated;
-        });
+      if (firstUserMessage && firstUserMessage.parts?.[0]?.type === 'text') {
+        const messageText = firstUserMessage.parts[0].text;
+        const title = messageText.length > 50 ? messageText.slice(0, 50) + '...' : messageText;
+        
+        // Update conversation title in backend
+        fetch('/api/conversations/update-title', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${user.token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ conversationId, title })
+        }).catch(err => console.error('Failed to update title:', err));
       }
     }
-  }, [agentMessages, userId]);
+  }, [agentMessages.length, conversationId, user?.token]);
 
-  const pendingToolCallConfirmation = agentMessages.some((m: UIMessage) =>
-    m.parts?.some(
-      (part) =>
-        isToolUIPart(part) &&
-        part.state === "input-available" &&
-        toolsRequiringConfirmation.includes(
-          part.type.replace("tool-", "") as keyof typeof tools
-        )
-    )
-  );
+  // All tools execute automatically now, no confirmation needed
+  const pendingToolCallConfirmation = false;
 
-  return (
-    <div className="flex h-screen bg-white">
-      <HasOpenAIKey />
+  // Listen for voice transcripts and add them to chat
+  useEffect(() => {
+    const handleVoiceTranscript = (event: CustomEvent) => {
+      const transcriptMessage = event.detail;
+      console.log('Adding voice transcript to chat:', transcriptMessage);
       
-      {/* Sidebar */}
-      <div className="w-64 bg-[#171717] flex flex-col h-full">
-        {/* Top Section */}
-        <div className="p-3">
-          {/* New Chat Button */}
-          <button
-            onClick={() => {
-              clearHistory();
+      // Add to voice messages state
+      setVoiceMessages(prev => [...prev, transcriptMessage]);
+    };
+
+    window.addEventListener('voice-transcript', handleVoiceTranscript as EventListener);
+    
+    return () => {
+      window.removeEventListener('voice-transcript', handleVoiceTranscript as EventListener);
+    };
+  }, [agentMessages]);
+
+  // Load itinerary when in collaboration mode
+  useEffect(() => {
+    if (isCollaborationMode && collaborationItineraryId && !currentItinerary) {
+      const loadCollaborativeItinerary = async () => {
+        try {
+          console.log('Loading collaborative itinerary for ID:', collaborationItineraryId);
+          const response = await fetch(`/api/collab/itinerary/${collaborationItineraryId}`);
+          
+          if (response.ok) {
+            const data = await response.json();
+            console.log('Loaded collaborative itinerary:', data);
+            setCurrentItinerary(data.data);
+          } else {
+            console.error('Failed to load collaborative itinerary:', response.statusText);
+            const errorText = await response.text();
+            console.error('Error response:', errorText);
+          }
+        } catch (error) {
+          console.error('Error loading collaborative itinerary:', error);
+        }
+      };
+
+      loadCollaborativeItinerary();
+    }
+  }, [isCollaborationMode, collaborationItineraryId, currentItinerary]);
+
+  // Sidebar handlers
+  const handleNewChat = useCallback(() => {
+    agentClearHistory();
               setSelectedActivity(null);
               setAgentInput("");
+    setCurrentItinerary(null);
+    setIsGeneratingItinerary(false);
+    setSearchEnabled(false);
               
+    const newConversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    setConversationId(newConversationId);
+    localStorage.setItem("aitinerary-conversation-id", newConversationId);
+    
+    setTimeout(() => {
               const textarea = document.querySelector('textarea');
               if (textarea) {
                 textarea.style.height = "auto";
               }
-            }}
-            className="w-full flex items-center gap-3 p-3 rounded-lg border border-gray-600 hover:bg-gray-700 text-white transition-colors"
-          >
-            <PencilSimple size={16} />
-            <span className="text-sm">Nuevo chat</span>
-          </button>
-        </div>
+    }, 100);
+  }, [agentClearHistory]);
 
+  const handleSelectChat = useCallback((chatId: string) => {
+    agentClearHistory();
+    setSelectedActivity(null);
+    setAgentInput("");
+    setCurrentItinerary(null);
+    setIsGeneratingItinerary(false);
+    
+    setConversationId(chatId);
+    localStorage.setItem("aitinerary-conversation-id", chatId);
+    
+    window.location.reload();
+  }, [agentClearHistory]);
 
-        {/* Chats Section */}
-        <div className="flex-1 overflow-y-auto px-3">
-          <div className="pb-3">
-            <div className="text-xs text-gray-500 mb-2 px-3">AItinerary</div>
-            <div className="space-y-1">
-              {recentChats.length === 0 ? (
-                <div className="text-xs text-gray-500 text-center py-8 px-3">
-                  Tus viajes recientes aparecerán aquí
-                </div>
-              ) : (
-                recentChats.map((chat) => (
-                  <button
-                    key={chat.id}
-                    className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-gray-700 text-gray-300 hover:text-white transition-colors text-left"
-                    onClick={() => {
-                      alert('Cargar viajes guardados próximamente!');
-                    }}
-                  >
-                    <ChatCircle size={16} />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm truncate">{chat.title}</div>
-                    </div>
-                  </button>
-                ))
-              )}
+  const handleHotelSelect = useCallback((hotel: any) => {
+    setAgentInput(`I have selected ${hotel.name} (${hotel.price}) with rating ${hotel.rating}. Now generate the complete itinerary using this hotel.`);
+    setTimeout(() => {
+      const form = document.querySelector('form');
+      if (form) {
+        form.requestSubmit();
+      }
+    }, 100);
+  }, []);
+
+  // If in collaboration mode, show shared itinerary page
+  if (isCollaborationMode && collaborationItineraryId) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <div className="bg-white border-b border-gray-200 px-4 py-3">
+          <div className="max-w-7xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => {
+                  // Remove collaboration query parameter
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete('collaborate');
+                  window.location.href = url.toString();
+                }}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                title="Back to home"
+              >
+                ←
+              </button>
+              <div>
+                <h1 className="text-lg font-semibold text-gray-900">
+                  Shared Itinerary
+                </h1>
+                <p className="text-sm text-gray-600">
+                  View only • {collaborationItineraryId}
+                </p>
+              </div>
             </div>
           </div>
         </div>
-
-        {/* Bottom Section - User */}
-        <div className="p-3 border-t border-gray-600">
-          {user ? (
-            <div className="relative group">
-              <button className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-gray-700 text-gray-300 hover:text-white transition-colors">
-                <div className="w-6 h-6 bg-blue-600 rounded-full flex items-center justify-center">
-                  <span className="text-white text-xs font-medium">
-                    {user.name.charAt(0).toUpperCase()}
-                  </span>
-                </div>
-                <div className="flex-1 text-left">
-                  <div className="text-sm text-white">{user.name}</div>
-                  <div className="text-xs text-gray-400">Gratis</div>
-                </div>
-              </button>
-              
-              {/* Dropdown Menu */}
-              <div className="absolute bottom-full left-0 right-0 mb-2 bg-gray-800 rounded-lg shadow-lg border border-gray-600 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
-                <div className="p-3 border-b border-gray-600">
-                  <p className="text-sm font-medium text-white">{user.name}</p>
-                  <p className="text-xs text-gray-400">{user.email}</p>
-                </div>
-                <button
-                  onClick={handleLogout}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
-                >
-                  <SignOut size={16} />
-                  Cerrar sesión
-                </button>
-              </div>
-            </div>
+        
+        <div className="max-w-4xl mx-auto p-6">
+          {currentItinerary ? (
+            <ItineraryDisplay 
+              data={typeof currentItinerary === 'string' ? currentItinerary : JSON.stringify(currentItinerary)} 
+              onActivityClick={() => {}}
+              onSave={() => {}}
+              onShare={() => {}}
+              onExportCalendar={() => {
+                if (currentItinerary) {
+                  downloadICalFile(currentItinerary);
+                }
+              }}
+            />
           ) : (
-            <button
-              onClick={() => setShowAuthModal(true)}
-              className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-gray-700 text-gray-300 hover:text-white transition-colors"
-            >
-              <User size={16} />
-              <span className="text-sm">Iniciar sesión</span>
-            </button>
+            <div className="text-center py-12">
+              <h3 className="text-lg font-medium text-gray-900 mb-2">
+                Shared Itinerary
+              </h3>
+              <p className="text-gray-600">
+                Loading itinerary...
+              </p>
+            </div>
           )}
         </div>
       </div>
+    );
+  }
+
+  return (
+    <div className="flex h-screen bg-white overflow-hidden">
+      <HasAIKey />
+      
+      {/* Left Sidebar */}
+      <Sidebar
+        user={user}
+        recentChats={recentChats}
+        onNewChat={handleNewChat}
+        onSelectChat={handleSelectChat}
+        onShowAuthModal={() => setShowAuthModal(true)}
+        onLogout={handleLogout}
+      />
 
       {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col bg-white">
+      <div className="flex-1 flex flex-col bg-white h-screen">
         {/* Chat Messages */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto max-h-screen">
           {agentMessages.length === 0 ? (
             // Welcome Screen
             <div className="h-full flex items-center justify-center">
               <div className="max-w-2xl mx-auto text-center px-4">
                 <h1 className="text-3xl font-semibold text-gray-900 mb-8">
-                  ¿Cómo puedo ayudarte hoy?
+                  How can I help you today?
                 </h1>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-3xl mx-auto">
                   <button 
                     className="p-4 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors text-left"
-                    onClick={() => setAgentInput("Planifica un viaje de 3 días a Tokio")}
+                    onClick={() => setAgentInput("Plan a 3-day trip to Tokyo")}
                   >
                     <div className="text-sm font-medium text-gray-900 mb-1">
-                      Fin de semana en Tokio
+                      Weekend in Tokyo
                     </div>
                     <div className="text-xs text-gray-600">
-                      3 días explorando cultura, comida y sitios de interés
+                      3 days exploring culture, food and points of interest
                     </div>
                   </button>
                   
                   <button 
                     className="p-4 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors text-left"
-                    onClick={() => setAgentInput("Planifica una semana en Europa visitando 3 ciudades")}
+                    onClick={() => setAgentInput("Plan a week in Europe visiting 3 cities")}
                   >
                     <div className="text-sm font-medium text-gray-900 mb-1">
-                      Aventura europea
+                      European adventure
                     </div>
                     <div className="text-xs text-gray-600">
-                      Viaje multi-ciudad con transporte y horarios
+                      Multi-city trip with transport and schedules
                     </div>
                   </button>
                   
                   <button 
                     className="p-4 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors text-left"
-                    onClick={() => setAgentInput("Planifica un viaje mochilero con presupuesto bajo al Sudeste Asiático")}
+                    onClick={() => setAgentInput("Plan a budget backpacking trip to Southeast Asia")}
                   >
                     <div className="text-sm font-medium text-gray-900 mb-1">
-                      Mochilero con presupuesto
+                      Budget backpacking
                     </div>
                     <div className="text-xs text-gray-600">
-                      Viaje económico de aventura
+                      Budget adventure trip
                     </div>
                   </button>
                   
                   <button 
                     className="p-4 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors text-left"
-                    onClick={() => setAgentInput("Planifica una luna de miel de lujo en Maldivas")}
+                    onClick={() => setAgentInput("Plan a luxury honeymoon in the Maldives")}
                   >
                     <div className="text-sm font-medium text-gray-900 mb-1">
-                      Escapada de lujo
+                      Luxury getaway
                     </div>
                     <div className="text-xs text-gray-600">
-                      Experiencias premium y alojamientos
+                      Premium experiences and accommodations
                     </div>
                   </button>
                 </div>
@@ -479,185 +900,137 @@ Please create this user account and log them in.`;
             </div>
           ) : (
             // Chat Messages
-            <div className="max-w-3xl mx-auto w-full">
-              {agentMessages.map((m, index) => {
-                const isUser = m.role === "user";
-                
-                return (
-                  <div key={m.id} className="group">
-                    <div className={`py-6 px-4 ${!isUser ? 'bg-gray-50' : ''}`}>
-                      <div className="flex gap-4">
-                        {/* Avatar */}
-                        <div className="flex-shrink-0">
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
-                            isUser 
-                              ? 'bg-blue-600 text-white' 
-                              : 'bg-green-600 text-white'
-                          }`}>
-                            {isUser ? 'Tú' : 'AI'}
-                          </div>
-                        </div>
-                        
-                        {/* Content */}
-                        <div className="flex-1 min-w-0">
-                          {m.parts?.map((part, i) => {
-                            if (part.type === "text") {
-                              // Check if this is an itinerary JSON
-                              const isItineraryJson = !isUser && part.text.trim().startsWith('{') && 
-                                part.text.includes('"id"') && part.text.includes('"destination"') && 
-                                part.text.includes('"days"');
-
-                              if (isItineraryJson) {
-                                return (
-                                  <div key={i} className="space-y-4">
-                                    <ItineraryDisplay 
-                                      data={part.text} 
-                                      onActivityClick={handleActivityClick}
-                                      onSave={handleSaveItinerary}
-                                      onShare={handleShareItinerary}
-                                    />
-                                  </div>
-                                );
-                              }
-
-                              return (
-                                <div key={i} className="prose prose-gray max-w-none text-gray-900">
-                                  <MemoizedMarkdown
-                                    id={`${m.id}-${i}`}
-                                    content={part.text}
-                                  />
-                                </div>
-                              );
-                            }
-
-                            if (isToolUIPart(part) && part.type === "tool-generateCompleteItinerary" && part.state === "output-available" && part.output) {
-                              // Display itinerary tool result
-                              return (
-                                <div key={i} className="space-y-4">
-                                  <ItineraryDisplay 
-                                    data={part.output as string} 
-                                    onActivityClick={handleActivityClick}
-                                    onSave={handleSaveItinerary}
-                                    onShare={handleShareItinerary}
-                                  />
-                                </div>
-                              );
-                            }
-
-                            return null;
-                          })}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="max-w-3xl mx-auto w-full h-full overflow-y-auto">
+              {[...agentMessages, ...voiceMessages].sort((a, b) => 
+                new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime()
+              ).map((m) => (
+                <ChatMessage
+                  key={m.id}
+                  message={m}
+                  isProcessing={isProcessing}
+                  isReasoning={isReasoning}
+                  isGeneratingItinerary={isGeneratingItinerary}
+                  onHotelSelect={handleHotelSelect}
+                />
+              ))}
               <div ref={messagesEndRef} />
+              
+              {/* Reasoning Indicator */}
+              {isReasoning && (
+                <div className="max-w-3xl mx-auto w-full py-6 px-4">
+                      <div className="flex gap-4">
+                        <div className="flex-shrink-0">
+                      <AIOrb size="32px" animationDuration={8} />
+                          </div>
+                    <div className="flex-1 min-w-0 flex items-center">
+                      <AnimatedShinyText className="text-base">
+                        Thinking and analyzing your request...
+                      </AnimatedShinyText>
+                        </div>
+                                  </div>
+                                </div>
+              )}
             </div>
           )}
         </div>
 
         {/* Input Area */}
-        <div className="p-4 bg-white">
-          <div className="max-w-3xl mx-auto">
-            {selectedActivity && (
-              <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                    <span className="text-sm font-medium text-blue-800">
-                      Actividad seleccionada: {selectedActivity.activity.title}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedActivity(null);
-                      setAgentInput("");
-                    }}
-                    className="text-blue-600 hover:text-blue-800 text-sm"
-                  >
-                    Limpiar
-                  </button>
-                </div>
-              </div>
-            )}
-            
-            <div className="relative">
-              <form onSubmit={handleAgentSubmit} className="flex items-end gap-2">
-                <div className="flex-1 relative">
-                  <Textarea
-                    disabled={pendingToolCallConfirmation}
-                    placeholder={
-                      pendingToolCallConfirmation
-                        ? "Por favor responde a la confirmación anterior..."
-                        : "Pregunta lo que quieras"
-                    }
-                    className="w-full p-3 pr-12 resize-none border border-gray-300 rounded-xl focus:ring-2 focus:ring-gray-200 focus:border-gray-400 text-gray-900 bg-white"
+        <ChatInput
                     value={agentInput}
                     onChange={handleAgentInputChange}
+          onSubmit={handleAgentSubmit}
                     onKeyDown={(e) => {
+            if (!user?.token) {
+              setShowAuthModal(true);
+              return;
+            }
                       if (e.key === "Enter" && !e.shiftKey) {
                         e.preventDefault();
                         handleAgentSubmit(e as unknown as React.FormEvent);
                       }
                     }}
-                    rows={1}
-                    style={{ minHeight: '44px', maxHeight: '200px' }}
-                  />
-                  
-                  {/* Attachment Button */}
-                  <button
-                    type="button"
-                    className="absolute left-3 bottom-3 text-gray-400 hover:text-gray-600"
-                  >
-                    <Paperclip size={16} />
-                  </button>
-                  
-                  {/* Voice Button */}
-                  <button
-                    type="button"
-                    className="absolute right-12 bottom-3 text-gray-400 hover:text-gray-600"
-                  >
-                    <Microphone size={16} />
-                  </button>
+          onStop={stop}
+          isAuthenticated={!!user?.token}
+          isSubmitting={status === "submitted" || status === "streaming"}
+          searchEnabled={searchEnabled}
+          onToggleSearch={() => setSearchEnabled(!searchEnabled)}
+          onToggleVoiceCall={() => setIsVoiceCallOpen(true)}
+          onShowAuthModal={() => setShowAuthModal(true)}
+          pendingConfirmation={pendingToolCallConfirmation}
+          isVoiceCallActive={isVoiceCallOpen}
+          selectedActivity={selectedActivity}
+          onClearActivity={() => {
+            setSelectedActivity(null);
+            setAgentInput("");
+          }}
+        />
                 </div>
                 
-                {/* Send Button */}
-                {status === "submitted" || status === "streaming" ? (
-                  <button
-                    type="button"
-                    onClick={stop}
-                    className="p-2 rounded-lg bg-gray-600 hover:bg-gray-700 text-white transition-colors"
-                  >
-                    <Stop size={16} />
-                  </button>
-                ) : (
-                  <button
-                    type="submit"
-                    disabled={!agentInput.trim()}
-                    className={`p-2 rounded-lg transition-colors ${
-                      agentInput.trim() 
-                        ? 'bg-black hover:bg-gray-800 text-white' 
-                        : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                    }`}
-                  >
-                    <ArrowUp size={16} />
-                  </button>
-                )}
-              </form>
+      {/* Right Sidebar - Itinerary Display */}
+      {(isGeneratingItinerary || currentItinerary) && (
+        <div 
+          className="bg-gray-50 border-l border-gray-200 flex flex-col h-full overflow-hidden relative"
+          style={{ width: `${rightSidebarWidth}px`, minWidth: '320px', maxWidth: '800px' }}
+        >
+          {/* Resize Handle */}
+          <div
+            className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-blue-500 transition-colors z-10"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              const startX = e.clientX;
+              const startWidth = rightSidebarWidth;
+
+              const handleMouseMove = (moveEvent: MouseEvent) => {
+                const delta = startX - moveEvent.clientX;
+                const newWidth = Math.min(Math.max(startWidth + delta, 320), 800);
+                setRightSidebarWidth(newWidth);
+              };
+
+              const handleMouseUp = () => {
+                document.removeEventListener('mousemove', handleMouseMove);
+                document.removeEventListener('mouseup', handleMouseUp);
+              };
+
+              document.addEventListener('mousemove', handleMouseMove);
+              document.addEventListener('mouseup', handleMouseUp);
+            }}
+          />
+
+            <div className="p-4 border-b border-gray-200 bg-white flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-gray-900">Itinerary</h2>
+              {currentItinerary && (
+                <ShareButton 
+                  itineraryId={currentItinerary.id || conversationId || ''} 
+                  onShare={(link) => {
+                    console.log('Share link generated:', link);
+                    console.log('Using itinerary ID:', currentItinerary.id || conversationId);
+                    // Show success message
+                    alert(`🎉 Share link copied to clipboard!\n\nShare this link with others:\n${link}`);
+                  }}
+                />
+              )}
             </div>
             
-            <div className="text-xs text-gray-500 text-center mt-3">
-              AItinerary puede cometer errores. Considera verificar la información importante.{" "}
-              <button className="underline hover:text-gray-700">
-                preferencias de cookies
-              </button>
-              .
+          <div className="flex-1 overflow-y-auto p-4">
+            {isGeneratingItinerary && !currentItinerary ? (
+              <div className="flex flex-col items-center justify-center h-full gap-6">
+                <AIOrb size="120px" animationDuration={12} />
+                <AnimatedShinyText className="text-lg font-medium">
+                  Generating your perfect itinerary...
+                </AnimatedShinyText>
             </div>
+            ) : currentItinerary ? (
+              <ItineraryDisplay 
+                data={typeof currentItinerary === 'string' ? currentItinerary : JSON.stringify(currentItinerary)} 
+                onActivityClick={handleActivityClick}
+                onSave={handleSaveItinerary}
+                onShare={handleShareItinerary}
+                onExportCalendar={handleExportToCalendar}
+              />
+            ) : null}
           </div>
         </div>
-      </div>
+      )}
       
       {/* Auth Modal */}
       <AuthModal
@@ -666,18 +1039,72 @@ Please create this user account and log them in.`;
         onLogin={handleLogin}
         onRegister={handleRegister}
       />
+
+      {/* Voice Call Modal */}
+      <VoiceCall
+        isOpen={isVoiceCallOpen}
+        onClose={() => {
+          setIsVoiceCallOpen(false);
+        }}
+        userToken={user?.token}
+        conversationId={conversationId || undefined}
+        onTranscript={(role, text) => {
+          console.log(`${role} transcript:`, text);
+          
+          // Add transcript directly to chat without triggering agent response
+          const transcriptMessage = {
+            id: `voice-${role}-${Date.now()}`,
+            role: role,
+            content: text,
+            createdAt: new Date().toISOString(),
+            parts: [
+              {
+                type: 'text',
+                text: text,
+              }
+            ]
+          };
+          
+          // Add to agent messages directly
+          // We need to access the agent's internal message system
+          // For now, we'll use a custom event to add the message
+          window.dispatchEvent(new CustomEvent('voice-transcript', {
+            detail: transcriptMessage
+          }));
+        }}
+        onToolCall={(toolName, args, result) => {
+          console.log(`Voice tool call: ${toolName}`, { args, result });
+          
+          // Handle specific tools that affect the UI
+          if (toolName === 'generateCompleteItinerary' && result?.result) {
+            try {
+              const parsed = typeof result.result === 'string' 
+                ? JSON.parse(result.result) 
+                : result.result;
+              setCurrentItinerary(parsed);
+            } catch (e) {
+              console.error('Error parsing itinerary from voice:', e);
+            }
+          }
+          
+          if (toolName === 'searchBooking' && result?.result) {
+            console.log('Hotels found via voice:', result.result);
+            // Hotels will be displayed via AI response
+          }
+        }}
+      />
     </div>
   );
 }
 
-const hasOpenAiKeyPromise = fetch("/check-open-ai-key").then((res) =>
-  res.json<{ success: boolean }>()
+const hasAiKeyPromise = fetch("/check-open-ai-key").then((res) =>
+  res.json<{ success: boolean; message: string }>()
 );
 
-function HasOpenAIKey() {
-  const hasOpenAiKey = use(hasOpenAiKeyPromise);
+function HasAIKey() {
+  const hasAiKey = use(hasAiKeyPromise);
 
-  if (!hasOpenAiKey.success) {
+  if (!hasAiKey.success) {
     return (
       <div className="absolute top-0 left-0 right-0 bg-red-50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-800 z-50">
         <div className="max-w-4xl mx-auto px-4 py-3">
@@ -688,8 +1115,8 @@ function HasOpenAIKey() {
               </svg>
             </div>
             <div className="text-sm">
-              <span className="font-medium text-red-800 dark:text-red-200">OpenAI API Key Required</span>
-              <span className="text-red-600 dark:text-red-300 ml-2">Configure your API key to use AItinerary</span>
+              <span className="font-medium text-red-800 dark:text-red-200">OpenAI key no configurada</span>
+              <span className="text-red-600 dark:text-red-300 ml-2">Configura OPENAI_API_KEY para usar la IA</span>
             </div>
           </div>
         </div>

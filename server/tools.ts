@@ -2,8 +2,10 @@
  * Tool definitions for the AItinerary AI chat agent
  * Tools execute automatically and return structured data for the frontend
  */
-import { tool, type ToolSet } from "ai";
+import { tool, type ToolSet, type ToolExecution } from "ai";
 import { z } from "zod/v3";
+import puppeteer from "@cloudflare/puppeteer";
+import type { Env } from "./types";
 
 /**
  * Generate a complete travel itinerary - executes automatically
@@ -387,6 +389,81 @@ const removeActivity = tool({
 });
 
 /**
+ * Remove multiple activities from the itinerary at once
+ */
+const removeMultipleActivities = tool({
+  description: "Remove multiple activities from the itinerary at once",
+  inputSchema: z.object({
+    itineraryId: z.string().describe("ID of the itinerary"),
+    activityIds: z.array(z.string()).describe("Array of activity IDs to remove")
+  }),
+  execute: async ({ itineraryId, activityIds }) => {
+    console.log(`Removing ${activityIds.length} activities from itinerary ${itineraryId}`);
+    
+    const result = {
+      success: true,
+      itineraryId,
+      removedActivityIds: activityIds,
+      count: activityIds.length,
+      message: `${activityIds.length} activities have been successfully removed from the itinerary.`,
+      timestamp: new Date().toISOString()
+    };
+
+    return JSON.stringify(result, null, 2);
+  }
+});
+
+/**
+ * Add multiple activities to the itinerary at once
+ */
+const addMultipleActivities = tool({
+  description: "Add multiple new activities to the itinerary at once",
+  inputSchema: z.object({
+    itineraryId: z.string().describe("ID of the itinerary"),
+    activities: z.array(z.object({
+      dayNumber: z.number().describe("Day number to add the activity to (1, 2, 3, etc.)"),
+      activity: z.object({
+        title: z.string().describe("Title of the new activity"),
+        description: z.string().describe("Description of the new activity"),
+        location: z.string().describe("Location of the new activity"),
+        coordinates: z.object({
+          lat: z.number(),
+          lng: z.number()
+        }).describe("Coordinates for the new activity"),
+        startTime: z.string().describe("Start time in HH:MM format"),
+        endTime: z.string().optional().describe("End time in HH:MM format"),
+        category: z.enum(["ACCOMMODATION", "TRANSPORTATION", "FOOD", "SIGHTSEEING", "ENTERTAINMENT", "SHOPPING", "OUTDOOR", "CULTURE", "WELLNESS", "BUSINESS", "OTHER"]).describe("Activity category"),
+        estimatedCost: z.number().describe("Estimated cost in USD"),
+        priority: z.enum(["LOW", "MEDIUM", "HIGH", "MUST_DO"]).describe("Priority level"),
+        tips: z.array(z.string()).describe("Tips for the new activity")
+      }).describe("Activity data")
+    })).describe("Array of activities to add with their day numbers")
+  }),
+  execute: async ({ itineraryId, activities }) => {
+    console.log(`Adding ${activities.length} activities to itinerary ${itineraryId}`);
+    
+    const newActivities = activities.map(({ dayNumber, activity }) => ({
+      dayNumber,
+      activity: {
+        ...activity,
+        id: `act_${Date.now()}_${Math.random()}`
+      }
+    }));
+
+    const result = {
+      success: true,
+      itineraryId,
+      addedActivities: newActivities,
+      count: newActivities.length,
+      message: `${newActivities.length} activities have been successfully added to the itinerary.`,
+      timestamp: new Date().toISOString()
+    };
+
+    return JSON.stringify(result, null, 2);
+  }
+});
+
+/**
  * Save an itinerary to the database
  */
 const saveItinerary = tool({
@@ -402,6 +479,8 @@ const saveItinerary = tool({
     const itineraryData = JSON.parse(itinerary);
     const saveId = `saved_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
+    // Note: This tool now returns a message that the frontend should handle
+    // The actual database saving should be done via API endpoints
     const result = {
       success: true,
       saveId,
@@ -409,7 +488,7 @@ const saveItinerary = tool({
       userId,
       isPublic,
       shareUrl: isPublic ? `https://aitinerary.app/share/${saveId}` : null,
-      message: `Itinerary "${itineraryData.title}" has been saved successfully.`,
+      message: `Itinerary "${itineraryData.title}" has been saved successfully. Please use the Save button to persist this itinerary.`,
       timestamp: new Date().toISOString()
     };
 
@@ -520,118 +599,179 @@ const shareItinerary = tool({
   }
 });
 
-/**
- * User registration
- */
-const registerUser = tool({
-  description: "Register a new user account",
-  inputSchema: z.object({
-    email: z.string().email().describe("User email address"),
-    password: z.string().min(8).describe("User password (minimum 8 characters)"),
-    name: z.string().describe("User full name")
-  }),
-  execute: async ({ email, password, name }) => {
-    console.log(`Registering user: ${email}`);
-    
-    // Simulate user registration
-    const userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    
-    const result = {
-      success: true,
-      userId,
-      email,
-      name,
-      message: "Account created successfully! You are now logged in.",
-      token: `token_${userId}`,
-      timestamp: new Date().toISOString()
-    };
 
-    return JSON.stringify(result, null, 2);
+/**
+ * Search the web for travel information
+ */
+const searchWeb = tool({
+  description: "Search the web for current travel information, prices, reviews, or booking options. Use this when you need real-time data about hotels, flights, restaurants, or attractions.",
+  inputSchema: z.object({
+    query: z.string().describe("Search query for travel information"),
+    targetSite: z.enum(["general", "booking.com", "tripadvisor", "google"]).optional().default("general").describe("Specific site to search"),
+    env: z.any().optional().describe("Environment bindings")
+  }),
+  execute: async ({ query, targetSite, env }) => {
+    console.log(`Searching web: ${query} on ${targetSite}`);
+    
+    if (!env?.BROWSER) {
+      return JSON.stringify({
+        query,
+        targetSite,
+        error: "Browser binding not configured. Enable Cloudflare Browser Rendering in your dashboard.",
+        results: []
+      }, null, 2);
+    }
+
+    try {
+      const browser = await puppeteer.launch(env.BROWSER);
+      const page = await browser.newPage();
+      
+      let searchUrl = "";
+      switch (targetSite) {
+        case "booking.com":
+          searchUrl = `https://www.booking.com/searchresults.html?ss=${encodeURIComponent(query)}`;
+          break;
+        case "tripadvisor":
+          searchUrl = `https://www.tripadvisor.com/Search?q=${encodeURIComponent(query)}`;
+          break;
+        case "google":
+        case "general":
+        default:
+          searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query + " travel")}`;
+          break;
+      }
+
+      await page.goto(searchUrl, { waitUntil: "networkidle0", timeout: 10000 });
+      
+      // Extract search results
+      const results = await page.evaluate(() => {
+        const items: Array<{ title: string; snippet: string; url: string }> = [];
+        
+        // Google results
+        document.querySelectorAll('div.g').forEach((el, idx) => {
+          if (idx >= 5) return; // Limit to 5 results
+          const titleEl = el.querySelector('h3');
+          const snippetEl = el.querySelector('.VwiC3b');
+          const linkEl = el.querySelector('a');
+          
+          if (titleEl && linkEl) {
+            items.push({
+              title: titleEl.textContent || '',
+              snippet: snippetEl?.textContent || '',
+              url: linkEl.getAttribute('href') || ''
+            });
+          }
+        });
+        
+        return items;
+      });
+
+      await browser.close();
+
+      return JSON.stringify({
+        query,
+        targetSite,
+        results: results.length > 0 ? results : [{
+          title: "No results found",
+          snippet: "Try a different search query",
+          url: "#"
+        }],
+        timestamp: new Date().toISOString()
+      }, null, 2);
+    } catch (error) {
+      console.error('Browser search error:', error);
+      return JSON.stringify({
+        query,
+        targetSite,
+        error: `Search failed: ${(error as Error).message}`,
+        results: []
+      }, null, 2);
+    }
   }
 });
 
 /**
- * User login
+ * Search booking.com for accommodation options
  */
-const loginUser = tool({
-  description: "Login an existing user",
+const searchBooking = tool({
+  description: "Search booking.com for hotels, apartments, or accommodation in a specific destination with dates and preferences.",
   inputSchema: z.object({
-    email: z.string().email().describe("User email address"),
-    password: z.string().describe("User password")
+    destination: z.string().describe("City or destination to search accommodation"),
+    checkIn: z.string().optional().describe("Check-in date in YYYY-MM-DD format"),
+    checkOut: z.string().optional().describe("Check-out date in YYYY-MM-DD format"),
+    guests: z.number().optional().default(2).describe("Number of guests"),
+    priceRange: z.enum(["budget", "mid-range", "luxury"]).optional().default("mid-range"),
+    env: z.any().optional().describe("Environment bindings")
   }),
-  execute: async ({ email, password }) => {
-    console.log(`Login attempt for: ${email}`);
+  execute: async ({ destination, checkIn, checkOut, guests, priceRange, env }) => {
+    console.log(`Searching Booking.com: ${destination}, guests: ${guests}, range: ${priceRange}`);
     
-    // Simulate login validation
-    const userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    
-    const result = {
-      success: true,
-      userId,
-      email,
-      name: "User Name", // Would come from database
-      message: "Login successful!",
-      token: `token_${userId}`,
-      timestamp: new Date().toISOString()
-    };
+    if (!env?.BROWSER) {
+      return JSON.stringify({
+        destination,
+        checkIn,
+        checkOut,
+        guests,
+        priceRange,
+        error: "Browser binding not configured",
+        hotels: []
+      }, null, 2);
+    }
 
-    return JSON.stringify(result, null, 2);
-  }
-});
+    try {
+      const browser = await puppeteer.launch(env.BROWSER);
+      const page = await browser.newPage();
+      
+      let bookingUrl = `https://www.booking.com/searchresults.html?ss=${encodeURIComponent(destination)}`;
+      if (checkIn) bookingUrl += `&checkin=${checkIn}`;
+      if (checkOut) bookingUrl += `&checkout=${checkOut}`;
+      bookingUrl += `&group_adults=${guests}`;
 
-/**
- * Get user profile
- */
-const getUserProfile = tool({
-  description: "Get user profile information",
-  inputSchema: z.object({
-    userId: z.string().describe("User ID"),
-    token: z.string().describe("Authentication token")
-  }),
-  execute: async ({ userId, token }) => {
-    console.log(`Getting profile for user: ${userId}`);
-    
-    const result = {
-      success: true,
-      userId,
-      email: "user@example.com",
-      name: "User Name",
-      createdAt: "2024-01-01T00:00:00Z",
-      totalItineraries: 5,
-      message: "Profile retrieved successfully",
-      timestamp: new Date().toISOString()
-    };
+      await page.goto(bookingUrl, { waitUntil: "networkidle0", timeout: 15000 });
+      
+      // Extract hotel results
+      const hotels = await page.evaluate(() => {
+        const items: Array<{ name: string; price: string; rating: string; url: string }> = [];
+        
+        document.querySelectorAll('[data-testid="property-card"]').forEach((el, idx) => {
+          if (idx >= 5) return;
+          
+          const nameEl = el.querySelector('[data-testid="title"]');
+          const priceEl = el.querySelector('[data-testid="price-and-discounted-price"]');
+          const ratingEl = el.querySelector('[data-testid="review-score"]');
+          const linkEl = el.querySelector('a');
+          
+          items.push({
+            name: nameEl?.textContent?.trim() || 'Hotel',
+            price: priceEl?.textContent?.trim() || 'Price not available',
+            rating: ratingEl?.textContent?.trim() || 'No rating',
+            url: linkEl?.getAttribute('href') || '#'
+          });
+        });
+        
+        return items;
+      });
 
-    return JSON.stringify(result, null, 2);
-  }
-});
+      await browser.close();
 
-/**
- * Update user profile
- */
-const updateUserProfile = tool({
-  description: "Update user profile information",
-  inputSchema: z.object({
-    userId: z.string().describe("User ID"),
-    token: z.string().describe("Authentication token"),
-    updates: z.object({
-      name: z.string().optional().describe("New name"),
-      email: z.string().email().optional().describe("New email"),
-      password: z.string().min(8).optional().describe("New password")
-    }).describe("Profile updates")
-  }),
-  execute: async ({ userId, token, updates }) => {
-    console.log(`Updating profile for user: ${userId}`);
-    
-    const result = {
-      success: true,
-      userId,
-      updates,
-      message: "Profile updated successfully",
-      timestamp: new Date().toISOString()
-    };
-
-    return JSON.stringify(result, null, 2);
+      return JSON.stringify({
+        destination,
+        checkIn,
+        checkOut,
+        guests,
+        priceRange,
+        hotels: hotels.length > 0 ? hotels : [],
+        message: hotels.length > 0 ? `Found ${hotels.length} accommodation options` : "No hotels found for these criteria",
+        timestamp: new Date().toISOString()
+      }, null, 2);
+    } catch (error) {
+      console.error('Booking search error:', error);
+      return JSON.stringify({
+        destination,
+        error: `Search failed: ${(error as Error).message}`,
+        hotels: []
+      }, null, 2);
+    }
   }
 });
 
@@ -647,12 +787,14 @@ export const tools = {
   replaceActivity,
   addActivity,
   removeActivity,
+  removeMultipleActivities,
+  addMultipleActivities,
   saveItinerary,
   loadItinerary,
   getUserItineraries,
   shareItinerary,
-  registerUser,
-  loginUser,
-  getUserProfile,
-  updateUserProfile
+  searchWeb,
+  searchBooking
 } satisfies ToolSet;
+
+export const executions: Record<string, ToolExecution> = {};

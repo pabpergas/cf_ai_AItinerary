@@ -37,3 +37,8 @@ wrangler.toml.local
 
 # Archivos de correo electrónico exportados (regla personalizada)
 emails/*.html
+
+# Wrangler
+.wrangler/
+
+wrangler.jsonc

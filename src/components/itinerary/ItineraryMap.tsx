@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo, memo } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -33,7 +33,7 @@ interface ItineraryMapProps {
   destination: string;
 }
 
-export function ItineraryMap({ days, destination }: ItineraryMapProps) {
+const ItineraryMapComponent = ({ days, destination }: ItineraryMapProps) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
 
@@ -69,20 +69,21 @@ export function ItineraryMap({ days, destination }: ItineraryMapProps) {
     return icons[category] || '📍';
   };
 
-  useEffect(() => {
-    if (!mapRef.current) return;
-
-    // Collect all activities with coordinates
-    const allActivities: Activity[] = [];
+  // Memoize activities collection
+  const allActivities = useMemo(() => {
+    const activities: Activity[] = [];
     days.forEach(day => {
       day.activities.forEach(activity => {
         if (activity.coordinates) {
-          allActivities.push(activity);
+          activities.push(activity);
         }
       });
     });
+    return activities;
+  }, [days]);
 
-    if (allActivities.length === 0) return;
+  useEffect(() => {
+    if (!mapRef.current || allActivities.length === 0) return;
 
     // Initialize map
     const map = L.map(mapRef.current).setView(
@@ -164,11 +165,47 @@ export function ItineraryMap({ days, destination }: ItineraryMapProps) {
         mapInstanceRef.current = null;
       }
     };
-  }, [days]);
+  }, [allActivities]);
 
   return (
     <div className="w-full h-80 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700">
       <div ref={mapRef} className="w-full h-full" />
     </div>
   );
-}
+};
+
+// Memoize the component to prevent unnecessary re-renders
+export const ItineraryMap = memo(ItineraryMapComponent, (prevProps, nextProps) => {
+  // Only re-render if days or destination actually changed
+  if (prevProps.destination !== nextProps.destination) {
+    return false; // Re-render needed
+  }
+  
+  if (prevProps.days.length !== nextProps.days.length) {
+    return false; // Re-render needed
+  }
+  
+  // Deep comparison of activities
+  for (let i = 0; i < prevProps.days.length; i++) {
+    const prevDay = prevProps.days[i];
+    const nextDay = nextProps.days[i];
+    
+    if (prevDay.activities.length !== nextDay.activities.length) {
+      return false; // Re-render needed
+    }
+    
+    for (let j = 0; j < prevDay.activities.length; j++) {
+      const prevActivity = prevDay.activities[j];
+      const nextActivity = nextDay.activities[j];
+      
+      if (prevActivity.id !== nextActivity.id ||
+          prevActivity.title !== nextActivity.title ||
+          prevActivity.coordinates?.lat !== nextActivity.coordinates?.lat ||
+          prevActivity.coordinates?.lng !== nextActivity.coordinates?.lng) {
+        return false; // Re-render needed
+      }
+    }
+  }
+  
+  return true; // No re-render needed
+});

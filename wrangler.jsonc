@@ -5,14 +5,13 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "aitinerary",
-	"main": "src/server.ts",
+	"main": "server/server.ts",
 	"compatibility_date": "2025-08-03",
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
-	"ai": {
-		"binding": "AI",
-		"remote": true
+	"browser": {
+		"binding": "BROWSER"
 	},
 	"assets": {
 		"directory": "public"
@@ -22,14 +21,31 @@
 			{
 				"name": "Chat",
 				"class_name": "Chat"
+			},
+			{
+				"name": "CollaborativeItinerary",
+				"class_name": "CollaborativeItinerary"
 			}
 		]
 	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "aitinerary-db",
+			"database_id": "a84d4448-f267-4da3-b671-c2701182feef"
+		}
+	],
 	"migrations": [
 		{
 			"tag": "v1",
 			"new_sqlite_classes": [
 				"Chat"
+			]
+		},
+		{
+			"tag": "v2",
+			"new_sqlite_classes": [
+				"CollaborativeItinerary"
 			]
 		}
 	],
