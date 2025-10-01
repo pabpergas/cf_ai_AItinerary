@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef, useCallback, use } from "react";
+import { useParams, useNavigate } from "react-router-dom";
 import { useAgent } from "agents/react";
 import { useAgentChat } from "agents/ai-react";
 import type { UIMessage } from "@ai-sdk/react";
@@ -29,6 +30,9 @@ interface User {
 }
 
 export default function AItinerary() {
+  const { conversationId: urlConversationId } = useParams<{ conversationId?: string }>();
+  const navigate = useNavigate();
+
   const [agentInput, setAgentInput] = useState("");
   const [selectedActivity, setSelectedActivity] = useState<{
     activity: any;
@@ -54,30 +58,21 @@ export default function AItinerary() {
     // Generate or retrieve user ID from localStorage
     const stored = localStorage.getItem('aitinerary-user-id');
     if (stored) return stored;
-    
+
     const newId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     localStorage.setItem('aitinerary-user-id', newId);
     return newId;
   });
-  const [conversationId, setConversationId] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    return localStorage.getItem("aitinerary-conversation-id");
-  });
+
+  // Use URL param if available, otherwise null (new chat)
+  const conversationId = urlConversationId || null;
 
   // Generate new conversation ID when starting a new chat
   const startNewConversation = useCallback(() => {
     const newConversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    setConversationId(newConversationId);
-    localStorage.setItem("aitinerary-conversation-id", newConversationId);
+    navigate(`/chat/${newConversationId}`);
     return newConversationId;
-  }, []);
-
-  // Clear conversation when starting fresh
-  const startFreshConversation = useCallback(() => {
-    localStorage.removeItem("aitinerary-conversation-id");
-    setConversationId(null);
-    // Clear history will be called after agentClearHistory is available
-  }, []);
+  }, [navigate]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const agent = useAgent({
@@ -99,11 +94,6 @@ export default function AItinerary() {
     agent
   });
 
-  // Complete fresh conversation function that includes clearing history
-  const completeFreshConversation = useCallback(() => {
-    startFreshConversation();
-    agentClearHistory();
-  }, [startFreshConversation, agentClearHistory]);
 
   // Detectar reasoning e itinerarios desde los mensajes
   useEffect(() => {
@@ -686,40 +676,6 @@ What would you like to know or change about this activity?`;
     };
   }, [agentMessages]);
 
-  // Sidebar handlers
-  const handleNewChat = useCallback(() => {
-    agentClearHistory();
-              setSelectedActivity(null);
-              setAgentInput("");
-    setCurrentItinerary(null);
-    setIsGeneratingItinerary(false);
-    setSearchEnabled(false);
-              
-    const newConversationId = `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    setConversationId(newConversationId);
-    localStorage.setItem("aitinerary-conversation-id", newConversationId);
-    
-    setTimeout(() => {
-              const textarea = document.querySelector('textarea');
-              if (textarea) {
-                textarea.style.height = "auto";
-              }
-    }, 100);
-  }, [agentClearHistory]);
-
-  const handleSelectChat = useCallback((chatId: string) => {
-    agentClearHistory();
-    setSelectedActivity(null);
-    setAgentInput("");
-    setCurrentItinerary(null);
-    setIsGeneratingItinerary(false);
-    
-    setConversationId(chatId);
-    localStorage.setItem("aitinerary-conversation-id", chatId);
-    
-    window.location.reload();
-  }, [agentClearHistory]);
-
   const handleHotelSelect = useCallback((hotel: any) => {
     setAgentInput(`I have selected ${hotel.name} (${hotel.price}) with rating ${hotel.rating}. Now generate the complete itinerary using this hotel.`);
     setTimeout(() => {
@@ -738,8 +694,6 @@ What would you like to know or change about this activity?`;
       <Sidebar
         user={user}
         recentChats={recentChats}
-        onNewChat={handleNewChat}
-        onSelectChat={handleSelectChat}
         onShowAuthModal={() => setShowAuthModal(true)}
         onLogout={handleLogout}
       />

@@ -10,6 +10,11 @@ export const router = createBrowserRouter([
     errorElement: <ErrorPage />,
   },
   {
+    path: '/chat/:conversationId',
+    element: <App />,
+    errorElement: <ErrorPage />,
+  },
+  {
     path: '/share/:itineraryId',
     element: <SharedItinerary />,
     errorElement: <ErrorPage />,

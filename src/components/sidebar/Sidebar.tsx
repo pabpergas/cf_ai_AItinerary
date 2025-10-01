@@ -1,4 +1,5 @@
 import { PencilSimple, ChatCircle, User, SignOut } from "@phosphor-icons/react";
+import { Link } from "react-router-dom";
 
 interface SidebarProps {
   user: {
@@ -11,8 +12,6 @@ interface SidebarProps {
     lastMessage: string;
     timestamp: string;
   }>;
-  onNewChat: () => void;
-  onSelectChat: (chatId: string) => void;
   onShowAuthModal: () => void;
   onLogout: () => void;
 }
@@ -20,8 +19,6 @@ interface SidebarProps {
 export function Sidebar({
   user,
   recentChats,
-  onNewChat,
-  onSelectChat,
   onShowAuthModal,
   onLogout
 }: SidebarProps) {
@@ -30,13 +27,13 @@ export function Sidebar({
       {/* Top Section */}
       <div className="p-3">
         {/* New Chat Button */}
-        <button
-          onClick={onNewChat}
+        <Link
+          to="/"
           className="w-full flex items-center gap-3 p-3 rounded-lg border border-gray-600 hover:bg-gray-700 text-white transition-colors"
         >
           <PencilSimple size={16} />
           <span className="text-sm">New chat</span>
-        </button>
+        </Link>
       </div>
 
       {/* Chats Section */}
@@ -50,16 +47,16 @@ export function Sidebar({
               </div>
             ) : (
               recentChats.map((chat) => (
-                <button
+                <Link
                   key={chat.id}
+                  to={`/chat/${chat.id}`}
                   className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-gray-700 text-gray-300 hover:text-white transition-colors text-left"
-                  onClick={() => onSelectChat(chat.id)}
                 >
                   <ChatCircle size={16} />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm truncate">{chat.title}</div>
                   </div>
-                </button>
+                </Link>
               ))
             )}
           </div>
