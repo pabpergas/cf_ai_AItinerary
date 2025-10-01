@@ -12,7 +12,7 @@ export function ShareButton({ itineraryId, onShare }: ShareButtonProps) {
 
   const generateShareLink = () => {
     const baseUrl = window.location.origin;
-    return `${baseUrl}?collaborate=${itineraryId}`;
+    return `${baseUrl}/share/${itineraryId}`;
   };
 
   const handleCopyLink = async () => {

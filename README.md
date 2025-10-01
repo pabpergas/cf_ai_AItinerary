@@ -156,6 +156,11 @@ npx wrangler deploy
 cf_ai_AItinerary/
 ├── src/                    # Frontend React application
 │   ├── app.tsx            # Main app component
+│   ├── client.tsx         # Entry point with Router
+│   ├── routes.tsx         # Route configuration
+│   ├── pages/             # Page components
+│   │   ├── SharedItinerary.tsx
+│   │   └── ErrorPage.tsx
 │   ├── components/        # React components
 │   └── hooks/             # Custom hooks
 ├── server/                # Backend Worker code
@@ -167,6 +172,14 @@ cf_ai_AItinerary/
 ├── wrangler.jsonc       # Cloudflare configuration
 └── package.json         # Dependencies
 ```
+
+## Routes
+
+The application uses React Router for navigation:
+
+- **`/`** - Main application with AI chat and itinerary planner
+- **`/share/:itineraryId`** - View shared itineraries (read-only)
+- **Error pages** - Custom 404 and error handling
 
 ## Configuration Files
 

@@ -42,12 +42,6 @@ export default function AItinerary() {
   }>>([]);
   const [user, setUser] = useState<User | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  
-  // Check if this is a share/collaboration URL using query parameters
-  const urlParams = new URLSearchParams(window.location.search);
-  const collaborationItineraryId = urlParams.get('collaborate');
-  const isCollaborationMode = !!collaborationItineraryId;
-  
   const [isReasoning, setIsReasoning] = useState(false);
   const [currentItinerary, setCurrentItinerary] = useState<any>(null);
   const [isGeneratingItinerary, setIsGeneratingItinerary] = useState(false);
@@ -441,7 +435,7 @@ What would you like to know or change about this activity?`;
   const generateShareLink = useCallback(() => {
     if (currentItinerary && conversationId) {
       const baseUrl = window.location.origin;
-      return `${baseUrl}/collaborate/${conversationId}`;
+      return `${baseUrl}/share/${conversationId}`;
     }
     return null;
   }, [currentItinerary, conversationId]);
@@ -692,32 +686,6 @@ What would you like to know or change about this activity?`;
     };
   }, [agentMessages]);
 
-  // Load itinerary when in collaboration mode
-  useEffect(() => {
-    if (isCollaborationMode && collaborationItineraryId && !currentItinerary) {
-      const loadCollaborativeItinerary = async () => {
-        try {
-          console.log('Loading collaborative itinerary for ID:', collaborationItineraryId);
-          const response = await fetch(`/api/collab/itinerary/${collaborationItineraryId}`);
-          
-          if (response.ok) {
-            const data = await response.json();
-            console.log('Loaded collaborative itinerary:', data);
-            setCurrentItinerary(data.data);
-          } else {
-            console.error('Failed to load collaborative itinerary:', response.statusText);
-            const errorText = await response.text();
-            console.error('Error response:', errorText);
-          }
-        } catch (error) {
-          console.error('Error loading collaborative itinerary:', error);
-        }
-      };
-
-      loadCollaborativeItinerary();
-    }
-  }, [isCollaborationMode, collaborationItineraryId, currentItinerary]);
-
   // Sidebar handlers
   const handleNewChat = useCallback(() => {
     agentClearHistory();
@@ -761,65 +729,6 @@ What would you like to know or change about this activity?`;
       }
     }, 100);
   }, []);
-
-  // If in collaboration mode, show shared itinerary page
-  if (isCollaborationMode && collaborationItineraryId) {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <div className="bg-white border-b border-gray-200 px-4 py-3">
-          <div className="max-w-7xl mx-auto flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => {
-                  // Remove collaboration query parameter
-                  const url = new URL(window.location.href);
-                  url.searchParams.delete('collaborate');
-                  window.location.href = url.toString();
-                }}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                title="Back to home"
-              >
-                ←
-              </button>
-              <div>
-                <h1 className="text-lg font-semibold text-gray-900">
-                  Shared Itinerary
-                </h1>
-                <p className="text-sm text-gray-600">
-                  View only • {collaborationItineraryId}
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-        
-        <div className="max-w-4xl mx-auto p-6">
-          {currentItinerary ? (
-            <ItineraryDisplay 
-              data={typeof currentItinerary === 'string' ? currentItinerary : JSON.stringify(currentItinerary)} 
-              onActivityClick={() => {}}
-              onSave={() => {}}
-              onShare={() => {}}
-              onExportCalendar={() => {
-                if (currentItinerary) {
-                  downloadICalFile(currentItinerary);
-                }
-              }}
-            />
-          ) : (
-            <div className="text-center py-12">
-              <h3 className="text-lg font-medium text-gray-900 mb-2">
-                Shared Itinerary
-              </h3>
-              <p className="text-gray-600">
-                Loading itinerary...
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="flex h-screen bg-white overflow-hidden">
