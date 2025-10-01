@@ -177,9 +177,25 @@ cf_ai_AItinerary/
 
 The application uses React Router for navigation:
 
-- **`/`** - Main application with AI chat and itinerary planner
+- **`/`** - Main application (new conversation)
+- **`/chat/:conversationId`** - Existing conversation by ID
 - **`/share/:itineraryId`** - View shared itineraries (read-only)
 - **Error pages** - Custom 404 and error handling
+
+### How Multi-Chat Works
+
+Each conversation is stored in its own Durable Object (DO), identified by the `conversationId`. When you:
+
+1. **Start a new chat**: Navigate to `/` (home)
+2. **Send first message**: Automatically creates a new conversation and navigates to `/chat/:conversationId`
+3. **Click on existing chat**: Navigate to `/chat/:conversationId` to load that conversation
+4. **Switch between chats**: React Router handles navigation without page reload
+
+The system uses URL-based routing instead of localStorage, ensuring:
+- Deep linking to specific conversations
+- Browser back/forward navigation works correctly
+- No full page reloads when switching chats
+- Cleaner architecture with React Router
 
 ## Configuration Files
 
