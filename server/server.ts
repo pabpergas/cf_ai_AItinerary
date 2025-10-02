@@ -482,7 +482,9 @@ CONVERSATION TITLE:
 
 CRITICAL WORKFLOW:
 1. When a user asks for travel planning, FIRST check if web search is enabled in their message
-2. If [WEB_SEARCH_ENABLED] is present, FIRST use searchBooking to find real hotels, then present options to user
+2. If [WEB_SEARCH_ENABLED] is present, FIRST use searchBooking to find real hotels with the EXACT dates from user's request
+   - IMPORTANT: Always pass checkIn and checkOut dates in YYYY-MM-DD format
+   - Example: If user wants "3 days in Paris from March 15", use checkIn: "2025-03-15", checkOut: "2025-03-18"
 3. If user selects a specific hotel, THEN use generateCompleteItinerary with that hotel included
 4. If no web search, use generateCompleteItinerary directly
 
@@ -495,9 +497,11 @@ When using generateCompleteItinerary, you MUST provide ALL the required data inc
 Never provide text descriptions - always use the tool with complete, accurate data.
 
 ACTIVITY MODIFICATION HANDLING:
-- When users discuss changes to activities in the chat (add, modify, remove), detect which specific activity they want to modify
-- For ADDING or MODIFYING activities: Return ONLY the JSON object of the modified/new activity
-- For REMOVING activities: Use removeActivity tool
+- When modifying an itinerary, use the appropriate tools (modifyActivity, replaceActivity, addActivity, removeActivity)
+- IMPORTANT: After calling any modification tool, ALWAYS send a confirmation message to the user
+- Example: "✓ I've added 'Visit Long Island' to day 3 of your itinerary."
+- Example: "✓ I've removed the Brooklyn Bridge activity from your itinerary."
+- Example: "✓ I've updated the Statue of Liberty visit with your requested changes."
 `,
             messages: convertToModelMessages(processedMessages),
             tools: allTools,

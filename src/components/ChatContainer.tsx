@@ -296,6 +296,109 @@ export function ChatContainer({ user, conversationId, onShowAuthModal }: ChatCon
             console.error('Failed to process addMultipleActivities:', e);
           }
         }
+
+        if (part.type === 'tool-modifyActivity' && part.state === 'output-available' && part.output) {
+          try {
+            const result = typeof part.output === 'string' ? JSON.parse(part.output) : part.output;
+            if (result.success && result.activityId && result.changes && currentItinerary) {
+              const updatedItinerary = { ...currentItinerary };
+              let activityModified = false;
+
+              for (const day of updatedItinerary.days) {
+                const activityIndex = day.activities.findIndex((act: any) => act.id === result.activityId);
+                if (activityIndex !== -1) {
+                  // Merge changes into existing activity
+                  day.activities[activityIndex] = {
+                    ...day.activities[activityIndex],
+                    ...result.changes
+                  };
+                  activityModified = true;
+                  break;
+                }
+              }
+
+              if (activityModified) {
+                setCurrentItinerary(updatedItinerary);
+              }
+            }
+            // Stop the generating spinner when activity tools complete
+            setIsGeneratingItinerary(false);
+          } catch (e) {
+            console.error('Failed to process modifyActivity:', e);
+          }
+        }
+
+        if (part.type === 'tool-replaceActivity' && part.state === 'output-available' && part.output) {
+          try {
+            const result = typeof part.output === 'string' ? JSON.parse(part.output) : part.output;
+            if (result.success && result.replacedActivityId && result.newActivity && currentItinerary) {
+              const updatedItinerary = { ...currentItinerary };
+              let activityReplaced = false;
+
+              for (const day of updatedItinerary.days) {
+                const activityIndex = day.activities.findIndex((act: any) => act.id === result.replacedActivityId);
+                if (activityIndex !== -1) {
+                  // Replace entire activity with new one
+                  day.activities[activityIndex] = result.newActivity;
+                  activityReplaced = true;
+                  break;
+                }
+              }
+
+              if (activityReplaced) {
+                setCurrentItinerary(updatedItinerary);
+              }
+            }
+            // Stop the generating spinner when activity tools complete
+            setIsGeneratingItinerary(false);
+          } catch (e) {
+            console.error('Failed to process replaceActivity:', e);
+          }
+        }
+
+        if (part.type === 'tool-addActivity' && part.state === 'output-available' && part.output) {
+          try {
+            const result = typeof part.output === 'string' ? JSON.parse(part.output) : part.output;
+            if (result.success && result.newActivity && result.dayNumber && currentItinerary) {
+              const updatedItinerary = { ...currentItinerary };
+              const dayIndex = updatedItinerary.days.findIndex((day: any) => day.dayNumber === result.dayNumber);
+
+              if (dayIndex !== -1) {
+                // Handle position-based insertion
+                if (result.position === 'start') {
+                  updatedItinerary.days[dayIndex].activities.unshift(result.newActivity);
+                } else if (result.position === 'before' && result.referenceActivityId) {
+                  const refIndex = updatedItinerary.days[dayIndex].activities.findIndex(
+                    (act: any) => act.id === result.referenceActivityId
+                  );
+                  if (refIndex !== -1) {
+                    updatedItinerary.days[dayIndex].activities.splice(refIndex, 0, result.newActivity);
+                  } else {
+                    updatedItinerary.days[dayIndex].activities.push(result.newActivity);
+                  }
+                } else if (result.position === 'after' && result.referenceActivityId) {
+                  const refIndex = updatedItinerary.days[dayIndex].activities.findIndex(
+                    (act: any) => act.id === result.referenceActivityId
+                  );
+                  if (refIndex !== -1) {
+                    updatedItinerary.days[dayIndex].activities.splice(refIndex + 1, 0, result.newActivity);
+                  } else {
+                    updatedItinerary.days[dayIndex].activities.push(result.newActivity);
+                  }
+                } else {
+                  // Default to end
+                  updatedItinerary.days[dayIndex].activities.push(result.newActivity);
+                }
+
+                setCurrentItinerary(updatedItinerary);
+              }
+            }
+            // Stop the generating spinner when activity tools complete
+            setIsGeneratingItinerary(false);
+          } catch (e) {
+            console.error('Failed to process addActivity:', e);
+          }
+        }
       });
     });
   }, [agentMessages, status, currentItinerary]);

@@ -731,24 +731,76 @@ const searchBooking = tool({
       
       // Extract hotel results
       const hotels = await page.evaluate(() => {
-        const items: Array<{ name: string; price: string; rating: string; url: string }> = [];
-        
+        const items: Array<{ name: string; price: string; rating: string; location: string; url: string }> = [];
+
         document.querySelectorAll('[data-testid="property-card"]').forEach((el, idx) => {
           if (idx >= 5) return;
-          
+
           const nameEl = el.querySelector('[data-testid="title"]');
-          const priceEl = el.querySelector('[data-testid="price-and-discounted-price"]');
-          const ratingEl = el.querySelector('[data-testid="review-score"]');
           const linkEl = el.querySelector('a');
-          
+
+          // Try multiple selectors for price
+          let priceText = 'Price not available';
+          const priceSelectors = [
+            '[data-testid="price-and-discounted-price"]',
+            '.prco-valign-middle-helper',
+            '.bui-price-display__value',
+            '.prco-text-nowrap-helper',
+            'span[aria-label*="price"]',
+            '[data-testid="price-for-x-nights"]'
+          ];
+
+          for (const selector of priceSelectors) {
+            const priceEl = el.querySelector(selector);
+            if (priceEl?.textContent?.trim()) {
+              priceText = priceEl.textContent.trim();
+              break;
+            }
+          }
+
+          // Try multiple selectors for rating
+          let ratingText = 'No rating';
+          const ratingSelectors = [
+            '[data-testid="review-score"]',
+            '.b5cd09854e',
+            '.ac78a2c285',
+            '[aria-label*="Scored"]'
+          ];
+
+          for (const selector of ratingSelectors) {
+            const ratingEl = el.querySelector(selector);
+            if (ratingEl?.textContent?.trim()) {
+              ratingText = ratingEl.textContent.trim();
+              break;
+            }
+          }
+
+          // Try to get location/address
+          let locationText = 'Location not specified';
+          const locationSelectors = [
+            '[data-testid="address"]',
+            '[data-testid="distance"]',
+            '.abf093bdfe',
+            '[data-testid="location"]'
+          ];
+
+          for (const selector of locationSelectors) {
+            const locationEl = el.querySelector(selector);
+            if (locationEl?.textContent?.trim()) {
+              locationText = locationEl.textContent.trim();
+              break;
+            }
+          }
+
           items.push({
             name: nameEl?.textContent?.trim() || 'Hotel',
-            price: priceEl?.textContent?.trim() || 'Price not available',
-            rating: ratingEl?.textContent?.trim() || 'No rating',
+            price: priceText,
+            rating: ratingText,
+            location: locationText,
             url: linkEl?.getAttribute('href') || '#'
           });
         });
-        
+
         return items;
       });
 
