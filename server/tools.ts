@@ -11,7 +11,7 @@ import type { Env } from "./types";
  * Generate a complete travel itinerary - executes automatically
  */
 const generateCompleteItinerary = tool({
-  description: "Generate a complete travel itinerary with all activities for each day. You must create realistic activity names and locations, then provide accurate lat/lng coordinates for each location based on the destination city.",
+  description: "Generate a complete travel itinerary with all activities for each day. You must create realistic activity names and locations, then provide accurate lat/lng coordinates for each location based on the destination city. IMPORTANT: Each activity MUST include a 'dayNumber' field indicating which day it belongs to.",
   inputSchema: z.object({
     destination: z.string().describe("Main destination or city"),
     startDate: z.string().describe("Start date in YYYY-MM-DD format"),
@@ -34,8 +34,8 @@ const generateCompleteItinerary = tool({
       estimatedCost: z.number().describe("Estimated cost in USD"),
       priority: z.enum(["LOW", "MEDIUM", "HIGH", "MUST_DO"]).describe("Priority level"),
       tips: z.array(z.string()).describe("Helpful tips for this activity"),
-      dayNumber: z.number().describe("Which day this activity belongs to (1, 2, 3, etc.)")
-    })).describe("Complete list of all activities for all days with specific locations and coordinates")
+      dayNumber: z.number().describe("REQUIRED: Which day this activity belongs to (1 for first day, 2 for second day, etc.)")
+    })).describe("Complete list of all activities for ALL days. Each activity MUST have dayNumber field set to the day it belongs to (1, 2, 3, etc.)")
   }),
   execute: async ({ destination, startDate, endDate, travelers, budget, interests, accommodationType, activities }) => {
     console.log(`Organizing complete itinerary for ${destination} from ${startDate} to ${endDate}`);

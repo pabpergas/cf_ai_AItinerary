@@ -493,6 +493,7 @@ When using generateCompleteItinerary, you MUST provide ALL the required data inc
 1. SPECIFIC REAL LOCATIONS: Use ACTUAL places that exist in the destination city.
 2. ACCURATE COORDINATES: You MUST provide the REAL latitude and longitude coordinates for each specific location.
 3. DETAILED ACTIVITIES: Create 3-5 activities per day with real place names, accurate coordinates, realistic time schedules, appropriate cost estimates, and helpful tips.
+4. DAY NUMBERS: CRITICAL - Each activity MUST include 'dayNumber' field (1, 2, 3, etc.) inside the activity object itself.
 
 Never provide text descriptions - always use the tool with complete, accurate data.
 
