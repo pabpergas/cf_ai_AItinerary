@@ -1,40 +1,52 @@
 import { useState } from "react";
 import { Button } from "@/components/button/Button";
 import { X, User, Envelope, Lock, Eye, EyeSlash } from "@phosphor-icons/react";
+import { signIn, signUp } from "@/lib/auth-client";
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onLogin: (email: string, password: string) => void;
-  onRegister: (email: string, password: string, name: string) => void;
+  onSuccess: () => void;
 }
 
-export function AuthModal({ isOpen, onClose, onLogin, onRegister }: AuthModalProps) {
+export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
   const [isLoginMode, setIsLoginMode] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    
+    setError(null);
+
     try {
       if (isLoginMode) {
-        await onLogin(email, password);
+        const result = await signIn.email({ email, password });
+        if (result.error) {
+          setError(result.error.message || "Invalid credentials");
+          return;
+        }
       } else {
-        await onRegister(email, password, name);
+        const result = await signUp.email({ email, password, name });
+        if (result.error) {
+          setError(result.error.message || "Failed to create account");
+          return;
+        }
       }
-      
+
       // Clear form
       setEmail("");
       setPassword("");
       setName("");
+      onSuccess();
       onClose();
     } catch (error) {
       console.error("Auth error:", error);
+      setError("An unexpected error occurred");
     } finally {
       setIsLoading(false);
     }
@@ -67,6 +79,12 @@ export function AuthModal({ isOpen, onClose, onLogin, onRegister }: AuthModalPro
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+              {error}
+            </div>
+          )}
+
           {!isLoginMode && (
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">

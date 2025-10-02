@@ -17,13 +17,16 @@ AItinerary is a serverless application that combines:
 - **Browser Automation**: Cloudflare Browser Rendering for web scraping
 
 ### Key Features
-- AI-powered itinerary generation
+- AI-powered itinerary generation with automatic title updates
 - Smart hotel search integration with Booking.com
 - Voice interaction using OpenAI Realtime API
 - Calendar export (iCal/Google Calendar)
 - Shareable itineraries
 - Interactive maps with Mapbox
-- JWT-based authentication
+- Better Auth authentication with secure session management
+- Real-time sidebar updates with animated title transitions
+- Code-split architecture for optimal performance
+- SPA routing with deep linking support
 
 ## Prerequisites
 
@@ -187,15 +190,17 @@ The application uses React Router for navigation:
 Each conversation is stored in its own Durable Object (DO), identified by the `conversationId`. When you:
 
 1. **Start a new chat**: Navigate to `/` (home)
-2. **Send first message**: Automatically creates a new conversation and navigates to `/chat/:conversationId`
-3. **Click on existing chat**: Navigate to `/chat/:conversationId` to load that conversation
-4. **Switch between chats**: React Router handles navigation without page reload
+2. **Send first message**: Conversation appears immediately in sidebar as "New Conversation"
+3. **AI responds**: Title auto-updates with animated transition based on your travel request
+4. **Click on existing chat**: Navigate to `/chat/:conversationId` to load that conversation
+5. **Switch between chats**: React Router handles navigation without page reload
 
-The system uses URL-based routing instead of localStorage, ensuring:
-- Deep linking to specific conversations
-- Browser back/forward navigation works correctly
+The system uses URL-based routing with SPA fallback, ensuring:
+- Deep linking to specific conversations works correctly
+- Browser back/forward navigation works as expected
 - No full page reloads when switching chats
-- Cleaner architecture with React Router
+- Messages persist in D1 database and reload on page refresh
+- Each conversation uses isolated Durable Object storage
 
 ## Configuration Files
 
@@ -203,8 +208,9 @@ The system uses URL-based routing instead of localStorage, ensuring:
 Main Cloudflare Workers configuration. Key sections:
 - `account_id`: Your Cloudflare account ID
 - `d1_databases`: D1 database binding
-- `durable_objects`: Durable Objects bindings
+- `durable_objects`: Durable Objects bindings (Chat, CollaborativeItinerary, NotificationManager)
 - `browser`: Browser Rendering binding
+- `assets.not_found_handling`: Set to `"single-page-application"` for SPA routing support
 
 ### .dev.vars
 Local development environment variables (not committed to git):

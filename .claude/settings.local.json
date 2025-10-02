@@ -3,7 +3,25 @@
     "allow": [
       "Bash(npm install:*)",
       "Bash(npm run check:*)",
-      "Bash(npm run deploy:*)"
+      "Bash(npm run deploy:*)",
+      "Bash(npx wrangler tail:*)",
+      "Bash(cat:*)",
+      "Bash(npx @better-auth/cli generate:*)",
+      "Bash(npx @better-auth/cli:*)",
+      "Bash(npm run migrate:local:*)",
+      "Bash(npm run migrate:remote:*)",
+      "Bash(npx wrangler d1 execute:*)",
+      "Bash(npx wrangler secret:*)",
+      "Read(//c/Users/pablo/Cloudflare//**)",
+      "Read(//c/Users/pablo/Cloudflare/**)",
+      "Bash(npx drizzle-kit:*)",
+      "Bash(npx wrangler d1 migrations apply:*)",
+      "Bash(npm i:*)",
+      "Bash(git log:*)",
+      "Bash(git reset:*)",
+      "Bash(git restore:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []

@@ -1,17 +1,21 @@
-import { useEffect, useState, useRef, useCallback, use } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo, lazy, Suspense } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAgent } from "agents/react";
 import { useAgentChat } from "agents/ai-react";
 import type { UIMessage } from "@ai-sdk/react";
 
 // Component imports
-import { ItineraryDisplay } from "@/components/itinerary/ItineraryDisplay";
 import { AnimatedShinyText } from "@/components/ui/AnimatedShinyText";
 import AIOrb from "@/components/ui/AIOrb";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { ChatInput } from "@/components/chat/ChatInput";
-import { VoiceCall } from "@/components/voice/VoiceCall";
 import { downloadICalFile } from "@/lib/calendar-export";
-import { ShareButton } from "@/components/collaboration/ShareButton";
+import { windowState } from "@/lib/window-state";
+
+// Dynamic imports for code splitting
+const ItineraryDisplay = lazy(() => import("@/components/itinerary/ItineraryDisplay").then(m => ({ default: m.ItineraryDisplay })));
+const VoiceCall = lazy(() => import("@/components/voice/VoiceCall").then(m => ({ default: m.VoiceCall })));
+const ShareButton = lazy(() => import("@/components/collaboration/ShareButton").then(m => ({ default: m.ShareButton })));
 
 interface User {
   userId: string;
@@ -21,12 +25,70 @@ interface User {
 }
 
 interface ChatContainerProps {
+  user: User;
   conversationId: string | null;
-  user: User | null;
   onShowAuthModal: () => void;
 }
 
-export function ChatContainer({ conversationId, user, onShowAuthModal }: ChatContainerProps) {
+export function ChatContainer({ user, conversationId, onShowAuthModal }: ChatContainerProps) {
+  const navigate = useNavigate();
+
+  // Get conversation ID from window state (managed globally)
+  const effectiveConversationId = conversationId || windowState.getConversationId();
+
+  console.log('[ChatContainer] Rendering:', {
+    conversationId,
+    fromWindow: windowState.getConversationId(),
+    effective: effectiveConversationId,
+    hasUser: !!user,
+    hasToken: !!user?.token,
+    tokenPreview: user?.token?.substring(0, 10)
+  });
+
+  // Don't render if no valid conversation ID
+  if (!effectiveConversationId) {
+    console.log('[ChatContainer] No conversationId, showing loading');
+    return (
+      <div className="flex-1 flex items-center justify-center bg-white">
+        <div className="text-gray-500">Loading conversation...</div>
+      </div>
+    );
+  }
+
+  // Don't render if no user token
+  if (!user?.token) {
+    console.log('[ChatContainer] No user token, showing auth required');
+    return (
+      <div className="flex-1 flex items-center justify-center bg-white">
+        <div className="text-gray-500">Authentication required...</div>
+      </div>
+    );
+  }
+
+  console.log('[ChatContainer] Creating agent with conversationId:', effectiveConversationId);
+
+  // Set up agent - use conversationId as the DO ID so each conversation has its own DO instance
+  // Use the format "chat/{id}" to specify the DO instance directly
+  const agent = useAgent({
+    agent: `chat/${effectiveConversationId}`,  // Use conversationId as DO ID in the route
+    query: {
+      token: user.token,
+      conversationId: effectiveConversationId
+    }
+  });
+
+  // Set up chat with useAgentChat
+  const {
+    messages: agentMessages,
+    sendMessage: agentSendMessage,
+    clearHistory,
+    status,
+    stop
+  } = useAgentChat<unknown, UIMessage<{ createdAt: string }>>({
+    agent
+  });
+
+  // UI State
   const [agentInput, setAgentInput] = useState("");
   const [selectedActivity, setSelectedActivity] = useState<{
     activity: any;
@@ -40,32 +102,9 @@ export function ChatContainer({ conversationId, user, onShowAuthModal }: ChatCon
   const [searchEnabled, setSearchEnabled] = useState(false);
   const [isVoiceCallOpen, setIsVoiceCallOpen] = useState(false);
   const [voiceMessages, setVoiceMessages] = useState<any[]>([]);
-  const [userId] = useState(() => {
-    const stored = localStorage.getItem('aitinerary-user-id');
-    if (stored) return stored;
-    const newId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    localStorage.setItem('aitinerary-user-id', newId);
-    return newId;
-  });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  const agent = useAgent({
-    agent: "chat",
-    name: conversationId || userId,
-    query: { token: user?.token ?? "" }
-  });
-
-  const {
-    messages: agentMessages,
-    addToolResult,
-    clearHistory: agentClearHistory,
-    status,
-    sendMessage,
-    stop
-  } = useAgentChat<unknown, UIMessage<{ createdAt: string }>>({
-    agent
-  });
+  const hasNavigated = useRef(false);
 
   // Detectar reasoning e itinerarios desde los mensajes
   useEffect(() => {
@@ -164,6 +203,21 @@ export function ChatContainer({ conversationId, user, onShowAuthModal }: ChatCon
             setIsGeneratingItinerary(false);
           } catch (e) {
             console.error('Failed to parse itinerary from tool:', e);
+          }
+        }
+
+        if (part.type === 'tool-updateConversationTitle' && part.state === 'output-available' && part.output) {
+          try {
+            const result = typeof part.output === 'string' ? JSON.parse(part.output) : part.output;
+            if (result.success && result.title) {
+              console.log('[ChatContainer] Conversation title updated:', result.title);
+              // Dispatch event to refresh conversations list in sidebar
+              window.dispatchEvent(new CustomEvent('conversation-title-updated', {
+                detail: { conversationId: effectiveConversationId, title: result.title }
+              }));
+            }
+          } catch (e) {
+            console.error('Failed to process updateConversationTitle:', e);
           }
         }
 
@@ -381,6 +435,17 @@ What would you like to know or change about this activity?`;
       return;
     }
 
+    // If we're in a new conversation (no conversationId from URL), navigate to the generated one
+    if (!conversationId && !hasNavigated.current) {
+      hasNavigated.current = true;
+      navigate(`/chat/${effectiveConversationId}`, { replace: true });
+      // The component will re-mount with the conversationId in the URL
+      // Store the message to send after navigation
+      sessionStorage.setItem('pending-message', agentInput);
+      sessionStorage.setItem('pending-search', searchEnabled.toString());
+      return;
+    }
+
     const message = agentInput;
     setAgentInput("");
 
@@ -393,11 +458,77 @@ What would you like to know or change about this activity?`;
       ? `${message}\n\n[WEB_SEARCH_ENABLED: The user has enabled web search. You MUST use searchWeb to get updated information about restaurants, attractions, prices and reviews. You MUST use searchBooking to search for real hotels with current prices. Prioritize real data over general knowledge.]`
       : message;
 
-    await sendMessage({
-      role: "user",
-      parts: [{ type: "text", text: messageWithContext }]
-    });
-  }, [agentInput, sendMessage, user?.token, onShowAuthModal, searchEnabled]);
+    const isFirstMessage = agentMessages.length === 0;
+    const isFifthMessage = agentMessages.length === 4; // Will be 5th after sending
+
+    // Use agents sendMessage API like in agents-starter
+    await agentSendMessage(
+      {
+        role: "user",
+        parts: [{ type: "text", text: messageWithContext }]
+      },
+      {
+        body: {}
+      }
+    );
+
+    // If this was the first message, trigger sidebar update after sending
+    if (isFirstMessage) {
+      console.log('[ChatContainer] First message sent - triggering sidebar update');
+      console.log('[ChatContainer] Dispatching conversation-created event with conversationId:', effectiveConversationId);
+
+      // Wait a bit to ensure backend has created the conversation
+      setTimeout(() => {
+        const event = new CustomEvent('conversation-created', {
+          detail: { conversationId: effectiveConversationId }
+        });
+        window.dispatchEvent(event);
+        console.log('[ChatContainer] Event dispatched after delay:', event);
+      }, 500);
+    }
+
+    // If this was the 5th message, trigger sidebar update to refresh the auto-generated title
+    if (isFifthMessage) {
+      console.log('[ChatContainer] Fifth message sent - triggering sidebar update for auto-generated title');
+
+      // Wait for backend to generate the title
+      setTimeout(() => {
+        const event = new CustomEvent('conversation-title-updated', {
+          detail: { conversationId: effectiveConversationId, title: null }
+        });
+        window.dispatchEvent(event);
+        console.log('[ChatContainer] Title update event dispatched after 5th message');
+      }, 2000); // Longer delay to allow backend to generate title
+    }
+  }, [agentInput, agentSendMessage, user?.token, onShowAuthModal, searchEnabled, conversationId, effectiveConversationId, navigate, agentMessages.length]);
+
+  // Send pending message after navigation - wait for WebSocket to be ready
+  useEffect(() => {
+    const pendingMessage = sessionStorage.getItem('pending-message');
+    const pendingSearch = sessionStorage.getItem('pending-search');
+
+    if (pendingMessage && effectiveConversationId && conversationId) {
+      sessionStorage.removeItem('pending-message');
+      sessionStorage.removeItem('pending-search');
+
+      const messageWithContext = pendingSearch === 'true'
+        ? `${pendingMessage}\n\n[WEB_SEARCH_ENABLED: The user has enabled web search. You MUST use searchWeb to get updated information about restaurants, attractions, prices and reviews. You MUST use searchBooking to search for real hotels with current prices. Prioritize real data over general knowledge.]`
+        : pendingMessage;
+
+      // Send the pending message using agentSendMessage
+      setTimeout(() => {
+        agentSendMessage(
+          {
+            role: "user",
+            parts: [{ type: "text", text: messageWithContext }]
+          },
+          {
+            body: {}
+          }
+        );
+      }, 300);
+    }
+  }, [effectiveConversationId, conversationId, agentSendMessage]);
 
   useEffect(() => {
     scrollToBottom();
@@ -434,7 +565,7 @@ What would you like to know or change about this activity?`;
       <div className="flex-1 flex flex-col bg-white h-screen">
         {/* Chat Messages */}
         <div className="flex-1 overflow-y-auto max-h-screen">
-          {agentMessages.length === 0 ? (
+          {agentMessages?.length === 0 ? (
             <div className="h-full flex items-center justify-center">
               <div className="max-w-2xl mx-auto text-center px-4">
                 <h1 className="text-3xl font-semibold text-gray-900 mb-8">
@@ -592,7 +723,7 @@ What would you like to know or change about this activity?`;
             <h2 className="text-lg font-semibold text-gray-900">Itinerary</h2>
             {currentItinerary && (
               <ShareButton
-                itineraryId={currentItinerary.id || conversationId || ''}
+                itineraryId={currentItinerary.id || effectiveConversationId}
                 onShare={(link) => {
                   alert(`🎉 Share link copied to clipboard!\n\nShare this link with others:\n${link}`);
                 }}
@@ -609,26 +740,30 @@ What would you like to know or change about this activity?`;
                 </AnimatedShinyText>
               </div>
             ) : currentItinerary ? (
-              <ItineraryDisplay
-                data={typeof currentItinerary === 'string' ? currentItinerary : JSON.stringify(currentItinerary)}
-                onActivityClick={handleActivityClick}
-                onSave={handleSaveItinerary}
-                onShare={handleShareItinerary}
-                onExportCalendar={handleExportToCalendar}
-              />
+              <Suspense fallback={<div className="flex items-center justify-center p-8"><div className="text-gray-500">Loading itinerary...</div></div>}>
+                <ItineraryDisplay
+                  data={typeof currentItinerary === 'string' ? currentItinerary : JSON.stringify(currentItinerary)}
+                  onActivityClick={handleActivityClick}
+                  onSave={handleSaveItinerary}
+                  onShare={handleShareItinerary}
+                  onExportCalendar={handleExportToCalendar}
+                />
+              </Suspense>
             ) : null}
           </div>
         </div>
       )}
 
       {/* Voice Call Modal */}
-      <VoiceCall
-        isOpen={isVoiceCallOpen}
-        onClose={() => {
-          setIsVoiceCallOpen(false);
-        }}
-        userToken={user?.token}
-        conversationId={conversationId || undefined}
+      {isVoiceCallOpen && (
+        <Suspense fallback={null}>
+          <VoiceCall
+            isOpen={isVoiceCallOpen}
+            onClose={() => {
+              setIsVoiceCallOpen(false);
+            }}
+            userToken={user?.token}
+            conversationId={effectiveConversationId}
         onTranscript={(role, text) => {
           const transcriptMessage = {
             id: `voice-${role}-${Date.now()}`,
@@ -659,7 +794,9 @@ What would you like to know or change about this activity?`;
             }
           }
         }}
-      />
+          />
+        </Suspense>
+      )}
     </>
   );
 }

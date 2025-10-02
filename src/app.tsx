@@ -1,10 +1,15 @@
-import { useEffect, useState, useCallback, use } from "react";
+import { useEffect, useState, useCallback, lazy, Suspense, use } from "react";
 import { useParams } from "react-router-dom";
 
 // Component imports
-import { AuthModal } from "@/components/auth/AuthModal";
-import { Sidebar } from "@/components/sidebar/Sidebar";
-import { ChatContainer } from "@/components/ChatContainer";
+import { useSession, signOut } from "@/lib/auth-client";
+import { windowState } from "@/lib/window-state";
+import { useWindowState } from "@/hooks/useWindowState";
+
+// Dynamic imports for code splitting
+const AuthModal = lazy(() => import("@/components/auth/AuthModal").then(m => ({ default: m.AuthModal })));
+const Sidebar = lazy(() => import("@/components/sidebar/Sidebar").then(m => ({ default: m.Sidebar })));
+const ChatContainer = lazy(() => import("@/components/ChatContainer").then(m => ({ default: m.ChatContainer })));
 
 interface User {
   userId: string;
@@ -14,7 +19,9 @@ interface User {
 }
 
 export default function AItinerary() {
-  const { conversationId } = useParams<{ conversationId?: string }>();
+  const { conversationId: conversationIdFromUrl } = useParams<{ conversationId?: string }>();
+  const { data: session, isPending } = useSession();
+  const { conversationId, user } = useWindowState();
 
   const [recentChats, setRecentChats] = useState<Array<{
     id: string;
@@ -22,158 +29,268 @@ export default function AItinerary() {
     lastMessage: string;
     timestamp: string;
   }>>([]);
-  const [user, setUser] = useState<User | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
 
-  const handleLogin = useCallback(async (email: string, password: string) => {
-    try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email, password }),
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        const userData: User = {
-          userId: data.userId,
-          email: data.email,
-          name: data.name,
-          token: data.token
-        };
-        setUser(userData);
-        localStorage.setItem('aitinerary-user', JSON.stringify(userData));
-        setShowAuthModal(false);
-      } else {
-        alert(`Error: ${data.error}`);
-      }
-    } catch (error) {
-      console.error('Login error:', error);
-      alert('Connection error. Please try again.');
+  // Sync conversationId from URL to window state
+  useEffect(() => {
+    if (conversationIdFromUrl) {
+      // URL has conversationId, sync it to window state
+      windowState.setConversationId(conversationIdFromUrl);
+    } else if (user && !conversationId) {
+      // User is logged in but no conversation active - create new one and navigate
+      const newId = windowState.generateConversationId();
+      windowState.setConversationId(newId);
+      // Navigate to the new conversation URL
+      window.history.replaceState(null, '', `/chat/${newId}`);
+    } else if (!user) {
+      // User not logged in, clear conversation
+      windowState.setConversationId(null);
     }
+  }, [conversationIdFromUrl, user, conversationId]);
+
+  // Sync session to window state (only once per session change)
+  useEffect(() => {
+    if (session?.user && session?.session?.token) {
+      const newUser = {
+        userId: session.user.id,
+        email: session.user.email,
+        name: session.user.name,
+        token: session.session.token
+      };
+
+      windowState.setUser(newUser);
+    } else {
+      windowState.setUser(null);
+      windowState.setConversationId(null);
+    }
+  }, [session?.user?.id, session?.session?.token]);
+
+  const handleShowAuthModal = useCallback(() => {
+    setShowAuthModal(true);
   }, []);
 
-  const handleRegister = useCallback(async (email: string, password: string, name: string) => {
-    try {
-      const response = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email, password, name }),
-      });
+  const handleCloseAuthModal = useCallback(() => {
+    setShowAuthModal(false);
+  }, []);
 
-      const data = await response.json();
-
-      if (data.success) {
-        const userData: User = {
-          userId: data.userId,
-          email: data.email,
-          name: data.name,
-          token: data.token
-        };
-        setUser(userData);
-        localStorage.setItem('aitinerary-user', JSON.stringify(userData));
-        setShowAuthModal(false);
-      } else {
-        alert(`Error: ${data.error}`);
-      }
-    } catch (error) {
-      console.error('Registration error:', error);
-      alert('Connection error. Please try again.');
-    }
+  const handleAuthSuccess = useCallback(() => {
+    // Session will be automatically updated by useSession hook
+    setShowAuthModal(false);
   }, []);
 
   const handleLogout = useCallback(async () => {
-    try {
-      if (user?.token) {
-        await fetch('/api/auth/logout', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${user.token}`,
-            'Content-Type': 'application/json',
-          },
-        });
-      }
-    } catch (error) {
-      console.error('Logout error:', error);
-    } finally {
-      setUser(null);
-      localStorage.removeItem('aitinerary-user');
-      setRecentChats([]);
-    }
-  }, [user?.token]);
-
-  useEffect(() => {
-    // Load user from localStorage
-    const loadUser = () => {
-      const stored = localStorage.getItem('aitinerary-user');
-      if (stored) {
-        try {
-          const userData = JSON.parse(stored);
-          setUser(userData);
-        } catch (e) {
-          console.error('Failed to parse user data:', e);
-        }
-      }
-    };
-
-    loadUser();
+    await signOut();
+    windowState.setUser(null);
+    windowState.setConversationId(null);
+    setRecentChats([]);
   }, []);
 
-  useEffect(() => {
-    // Load conversations when user is available
-    const loadConversations = async () => {
-      if (!user?.token) return;
+  // Fetch conversations list
+  const fetchConversations = useCallback(async () => {
+    if (!user?.token) return;
 
-      try {
-        const response = await fetch('/api/conversations', {
-          headers: { Authorization: `Bearer ${user.token}` }
-        });
-        if (response.ok) {
-          const data: any = await response.json();
-          setRecentChats(data.conversations || []);
+    try {
+      const response = await fetch('/api/conversations', {
+        headers: {
+          'Authorization': `Bearer ${user.token}`
         }
-      } catch (error) {
-        console.error('Failed to load conversations:', error);
+      });
+      const data = await response.json();
+      if (data.success && data.conversations) {
+        console.log('[App] Conversations fetched:', data.conversations);
+        setRecentChats(data.conversations);
       }
-    };
-
-    if (user?.token) {
-      loadConversations();
+    } catch (error) {
+      console.error('[App] Failed to fetch conversations:', error);
     }
   }, [user?.token]);
+
+  // Fetch conversations on mount and when user changes
+  useEffect(() => {
+    fetchConversations();
+  }, [fetchConversations]);
+
+  // Listen for conversation title updates
+  useEffect(() => {
+    console.log('[App] Registering event listeners for conversations');
+
+    const handleTitleUpdate = (event: CustomEvent) => {
+      console.log('[App] Conversation title updated event received:', event.detail);
+      // Refresh conversations list
+      fetchConversations();
+    };
+
+    const handleConversationCreated = (event: CustomEvent) => {
+      console.log('[App] New conversation created event received:', event.detail);
+      // Refresh conversations list immediately
+      fetchConversations();
+    };
+
+    window.addEventListener('conversation-title-updated', handleTitleUpdate as EventListener);
+    window.addEventListener('conversation-created', handleConversationCreated as EventListener);
+
+    console.log('[App] Event listeners registered');
+
+    return () => {
+      console.log('[App] Removing event listeners');
+      window.removeEventListener('conversation-title-updated', handleTitleUpdate as EventListener);
+      window.removeEventListener('conversation-created', handleConversationCreated as EventListener);
+    };
+  }, [fetchConversations]);
 
   return (
     <div className="flex h-screen bg-white overflow-hidden">
       <HasAIKey />
 
       {/* Left Sidebar */}
-      <Sidebar
-        user={user}
-        recentChats={recentChats}
-        onShowAuthModal={() => setShowAuthModal(true)}
-        onLogout={handleLogout}
-      />
+      <Suspense fallback={
+        <div className="w-64 bg-[#171717] flex flex-col h-full animate-pulse">
+          <div className="p-3">
+            <div className="w-full h-12 bg-gray-700 rounded-lg"></div>
+          </div>
+        </div>
+      }>
+        <Sidebar
+          recentChats={recentChats}
+          onShowAuthModal={handleShowAuthModal}
+          onLogout={handleLogout}
+        />
+      </Suspense>
 
-      {/* Chat Container - will re-mount when conversationId changes */}
-      <ChatContainer
-        key={conversationId || 'new'}
-        conversationId={conversationId || null}
-        user={user}
-        onShowAuthModal={() => setShowAuthModal(true)}
-      />
+      {/* Chat Container */}
+      {user ? (
+        <Suspense fallback={
+          <div className="flex-1 flex flex-col bg-white h-screen">
+            <div className="flex-1 overflow-y-auto max-h-screen">
+              <div className="h-full flex items-center justify-center">
+                <div className="max-w-2xl mx-auto text-center px-4">
+                  <h1 className="text-3xl font-semibold text-gray-900 mb-8">
+                    How can I help you today?
+                  </h1>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-3xl mx-auto">
+                    <div className="p-4 border border-gray-200 rounded-xl bg-gray-50 text-left">
+                      <div className="text-sm font-medium text-gray-900 mb-1">
+                        Weekend in Tokyo
+                      </div>
+                      <div className="text-xs text-gray-600">
+                        3 days exploring culture, food and points of interest
+                      </div>
+                    </div>
+
+                    <div className="p-4 border border-gray-200 rounded-xl bg-gray-50 text-left">
+                      <div className="text-sm font-medium text-gray-900 mb-1">
+                        European adventure
+                      </div>
+                      <div className="text-xs text-gray-600">
+                        Multi-city trip with transport and schedules
+                      </div>
+                    </div>
+
+                    <div className="p-4 border border-gray-200 rounded-xl bg-gray-50 text-left">
+                      <div className="text-sm font-medium text-gray-900 mb-1">
+                        Budget backpacking
+                      </div>
+                      <div className="text-xs text-gray-600">
+                        Budget adventure trip
+                      </div>
+                    </div>
+
+                    <div className="p-4 border border-gray-200 rounded-xl bg-gray-50 text-left">
+                      <div className="text-sm font-medium text-gray-900 mb-1">
+                        Luxury getaway
+                      </div>
+                      <div className="text-xs text-gray-600">
+                        Premium experiences and accommodations
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        }>
+          <ChatContainer
+            key={conversationId || 'new-chat'}
+            user={user}
+            conversationId={conversationId}
+            onShowAuthModal={handleShowAuthModal}
+          />
+        </Suspense>
+      ) : (
+        <div className="flex-1 flex flex-col bg-white h-screen">
+          <div className="flex-1 overflow-y-auto max-h-screen">
+            <div className="h-full flex items-center justify-center">
+              <div className="max-w-2xl mx-auto text-center px-4">
+                <h1 className="text-3xl font-semibold text-gray-900 mb-8">
+                  How can I help you today?
+                </h1>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-3xl mx-auto">
+                  <button
+                    onClick={handleShowAuthModal}
+                    className="p-4 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors text-left"
+                  >
+                    <div className="text-sm font-medium text-gray-900 mb-1">
+                      Weekend in Tokyo
+                    </div>
+                    <div className="text-xs text-gray-600">
+                      3 days exploring culture, food and points of interest
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={handleShowAuthModal}
+                    className="p-4 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors text-left"
+                  >
+                    <div className="text-sm font-medium text-gray-900 mb-1">
+                      European adventure
+                    </div>
+                    <div className="text-xs text-gray-600">
+                      Multi-city trip with transport and schedules
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={handleShowAuthModal}
+                    className="p-4 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors text-left"
+                  >
+                    <div className="text-sm font-medium text-gray-900 mb-1">
+                      Budget backpacking
+                    </div>
+                    <div className="text-xs text-gray-600">
+                      Budget adventure trip
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={handleShowAuthModal}
+                    className="p-4 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors text-left"
+                  >
+                    <div className="text-sm font-medium text-gray-900 mb-1">
+                      Luxury getaway
+                    </div>
+                    <div className="text-xs text-gray-600">
+                      Premium experiences and accommodations
+                    </div>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Auth Modal */}
-      <AuthModal
-        isOpen={showAuthModal}
-        onClose={() => setShowAuthModal(false)}
-        onLogin={handleLogin}
-        onRegister={handleRegister}
-      />
+      {showAuthModal && (
+        <Suspense fallback={null}>
+          <AuthModal
+            isOpen={showAuthModal}
+            onClose={handleCloseAuthModal}
+            onSuccess={handleAuthSuccess}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

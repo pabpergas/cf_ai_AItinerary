@@ -14,7 +14,8 @@
 		"binding": "BROWSER"
 	},
 	"assets": {
-		"directory": "public"
+		"directory": "public",
+		"not_found_handling": "single-page-application"
 	},
 	"durable_objects": {
 		"bindings": [
@@ -25,6 +26,10 @@
 			{
 				"name": "CollaborativeItinerary",
 				"class_name": "CollaborativeItinerary"
+			},
+			{
+				"name": "NotificationManager",
+				"class_name": "NotificationManager"
 			}
 		]
 	},
@@ -46,6 +51,12 @@
 			"tag": "v2",
 			"new_sqlite_classes": [
 				"CollaborativeItinerary"
+			]
+		},
+		{
+			"tag": "v3",
+			"new_classes": [
+				"NotificationManager"
 			]
 		}
 	],

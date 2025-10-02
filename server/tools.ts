@@ -778,6 +778,20 @@ const searchBooking = tool({
 /**
  * Export all available tools
  */
+/**
+ * Update conversation title - called by AI after generating a title
+ */
+const updateConversationTitle = tool({
+  description: "Update the title of the current conversation. This should be called after analyzing the user's travel request to set a descriptive title (max 6 words).",
+  inputSchema: z.object({
+    title: z.string().max(60).describe("Short descriptive title for the conversation (max 6 words)")
+  }),
+  execute: async ({ title }) => {
+    // This tool needs access to conversationId and will be handled specially in server.ts
+    return { success: true, title };
+  }
+});
+
 export const tools = {
   generateCompleteItinerary,
   getDestinationInfo,
@@ -794,7 +808,8 @@ export const tools = {
   getUserItineraries,
   shareItinerary,
   searchWeb,
-  searchBooking
+  searchBooking,
+  updateConversationTitle
 } satisfies ToolSet;
 
 export const executions: Record<string, ToolExecution> = {};

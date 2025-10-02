@@ -3,8 +3,10 @@
 export interface Env {
   DB: D1Database;
   OPENAI_API_KEY?: string;
+  BETTER_AUTH_SECRET?: string;
   Chat: DurableObjectNamespace;
   CollaborativeItinerary: DurableObjectNamespace;
+  NotificationManager: DurableObjectNamespace;
   BROWSER?: Fetcher; // Cloudflare Browser binding
 }
 
