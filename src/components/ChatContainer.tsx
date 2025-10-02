@@ -105,6 +105,7 @@ export function ChatContainer({ user, conversationId, onShowAuthModal }: ChatCon
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasNavigated = useRef(false);
+  const processedMessageIds = useRef<Set<string>>(new Set());
 
   // Detectar reasoning e itinerarios desde los mensajes
   useEffect(() => {
@@ -139,6 +140,11 @@ export function ChatContainer({ user, conversationId, onShowAuthModal }: ChatCon
     }
 
     agentMessages.forEach(message => {
+      // Skip already processed messages
+      if (processedMessageIds.current.has(message.id)) {
+        return;
+      }
+
       message.parts?.forEach((part: any) => {
         if (part.type === 'text' && message.role === 'assistant') {
           const text = part.text?.trim() || '';
@@ -400,6 +406,9 @@ export function ChatContainer({ user, conversationId, onShowAuthModal }: ChatCon
           }
         }
       });
+
+      // Mark message as processed after processing all parts
+      processedMessageIds.current.add(message.id);
     });
   }, [agentMessages, status, currentItinerary]);
 
